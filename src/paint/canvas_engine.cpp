@@ -260,7 +260,15 @@ void rasterizePoly2DToBuffer(uint8_t* dstRgba, int bufW, int bufH,
     }
 }
 
-bool renderTextToBitmap(const TextLayerProps& tp, std::vector<uint8_t>& outRgba, int& outW, int& outH) {
+struct TextLineSpan {
+    size_t startIdx = 0;
+    size_t endIdx = 0; // exclusive
+    float widthPx = 0.0f;
+};
+
+bool renderTextToBitmap(const TextLayerProps& tp, std::vector<uint8_t>& outRgba, int& outW, int& outH,
+                        std::vector<CharBoxUv>* outNormBoxes = nullptr) {
+    if (outNormBoxes) outNormBoxes->assign(tp.text.size(), CharBoxUv{});
     if (tp.text.empty()) return false;
 
     std::string fontFile = tp.fontPath;
@@ -281,60 +289,248 @@ bool renderTextToBitmap(const TextLayerProps& tp, std::vector<uint8_t>& outRgba,
     if (!ifs.is_open()) return false;
     std::vector<uint8_t> ttfData((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
     stbtt_fontinfo font{};
-    if (!stbtt_InitFont(&font, ttfData.data(), stbtt_GetFontOffsetForIndex(ttfData.data(), 0))) return false;
+    int fontOffset = stbtt_GetFontOffsetForIndex(ttfData.data(), 0);
+    if (fontOffset < 0 || !stbtt_InitFont(&font, ttfData.data(), fontOffset)) return false;
 
-    float pixelH = std::max(16.0f, tp.fontSizePx);
-    float scale = stbtt_ScaleForPixelHeight(&font, pixelH);
+    const float pixelH = std::max(12.0f, tp.fontSizePx);
+    const float baseScale = stbtt_ScaleForPixelHeight(&font, pixelH);
+    const float hMul = std::clamp(tp.hScalePct, 10.0f, 400.0f) * 0.01f;
+    const float vMul = std::clamp(tp.vScalePct, 10.0f, 400.0f) * 0.01f;
     int ascent = 0, descent = 0, lineGap = 0;
     stbtt_GetFontVMetrics(&font, &ascent, &descent, &lineGap);
-    int baseline = static_cast<int>(std::ceil(ascent * scale));
+    const float lineAdvance = std::max(8.0f, (ascent - descent + lineGap) * baseScale * vMul * 1.15f);
+    const float baselineOffset = ascent * baseScale * vMul;
 
-    int outPad = static_cast<int>(std::ceil(tp.outlineWidth)) + 8;
-    float totalW = 0.0f;
-    for (size_t i = 0; i < tp.text.size(); ++i) {
+    auto resolveChar = [&](size_t idx, bool& outSmallCap) -> unsigned char {
+        unsigned char raw = static_cast<unsigned char>(tp.text[idx]);
+        outSmallCap = false;
+        if (raw >= 'a' && raw <= 'z') {
+            if (tp.allCaps) {
+                raw = static_cast<unsigned char>(raw - 'a' + 'A');
+            } else if (tp.smallCaps) {
+                raw = static_cast<unsigned char>(raw - 'a' + 'A');
+                outSmallCap = true;
+            }
+        }
+        return raw;
+    };
+
+    auto charAdvance = [&](size_t idx) -> float {
+        if (tp.text[idx] == '\n' || tp.text[idx] == '\r') return 0.0f;
+        bool sc = false;
+        unsigned char ch = resolveChar(idx, sc);
+        float cScale = (idx < tp.charStyles.size()) ? std::clamp(tp.charStyles[idx].scale, 0.1f, 4.0f) : 1.0f;
+        if (sc) cScale *= 0.78f;
         int adv = 0, lsb = 0;
-        unsigned char ch = static_cast<unsigned char>(tp.text[i]);
         stbtt_GetCodepointHMetrics(&font, ch, &adv, &lsb);
-        totalW += adv * scale + tp.tracking;
-        if (i + 1 < tp.text.size()) {
-            totalW += stbtt_GetCodepointKernAdvance(&font, ch, static_cast<unsigned char>(tp.text[i + 1])) * scale;
+        float w = adv * baseScale * hMul * cScale + tp.tracking;
+        if (idx + 1 < tp.text.size() && tp.text[idx + 1] != '\n' && tp.text[idx + 1] != '\r') {
+            bool sc2 = false;
+            unsigned char ch2 = resolveChar(idx + 1, sc2);
+            w += stbtt_GetCodepointKernAdvance(&font, ch, ch2) * baseScale * hMul * cScale;
+        }
+        return w;
+    };
+
+    // Build wrapped lines
+    std::vector<TextLineSpan> lines;
+    const float wrapLimit = tp.isAreaBox ? std::max(40.0f, tp.boxWidthPx) : 1e9f;
+    const size_t nChars = tp.text.size();
+    size_t lineStart = 0;
+    while (lineStart <= nChars) {
+        if (lineStart == nChars) {
+            if (lines.empty()) lines.push_back({0, 0, 0.0f});
+            break;
+        }
+        size_t cur = lineStart;
+        float curW = 0.0f;
+        size_t lastSpace = std::string::npos;
+        float widthAtSpace = 0.0f;
+        bool hitNewline = false;
+
+        while (cur < nChars) {
+            char c = tp.text[cur];
+            if (c == '\n') {
+                hitNewline = true;
+                break;
+            }
+            if (c == '\r') {
+                ++cur;
+                continue;
+            }
+            float cw = charAdvance(cur);
+            if (tp.isAreaBox && cur > lineStart && (curW + cw) > wrapLimit) {
+                if (lastSpace != std::string::npos && lastSpace > lineStart) {
+                    cur = lastSpace + 1;
+                    curW = widthAtSpace;
+                }
+                break;
+            }
+            curW += cw;
+            if (c == ' ' || c == '\t') {
+                lastSpace = cur;
+                widthAtSpace = curW;
+            }
+            ++cur;
+        }
+        lines.push_back({lineStart, cur, curW});
+        if (hitNewline) {
+            lineStart = cur + 1;
+        } else {
+            lineStart = cur;
+            if (lineStart >= nChars) break;
         }
     }
 
-    int shearExtra = static_cast<int>(std::ceil(std::fabs(tp.italicShear) * pixelH)) + 6;
-    outW = std::clamp(static_cast<int>(std::ceil(totalW)) + outPad * 2 + shearExtra, 8, 2048);
-    outH = std::clamp(static_cast<int>(std::ceil((ascent - descent) * scale)) + outPad * 2, 8, 1024);
+    float maxLineW = 0.0f;
+    for (const auto& ln : lines) maxLineW = std::max(maxLineW, ln.widthPx);
+    if (tp.isAreaBox) {
+        maxLineW = std::max(maxLineW, tp.boxWidthPx);
+    }
+
+    const int outPad = static_cast<int>(std::ceil(tp.outlineWidth)) + 12;
+    const int shearExtra = static_cast<int>(std::ceil(std::fabs(tp.italicShear) * pixelH)) + 8;
+    const float contentH = std::max(
+        tp.isAreaBox ? tp.boxHeightPx : 0.0f,
+        static_cast<float>(std::max<size_t>(1, lines.size())) * lineAdvance);
+    outW = std::clamp(static_cast<int>(std::ceil(maxLineW)) + outPad * 2 + shearExtra, 16, 2048);
+    outH = std::clamp(static_cast<int>(std::ceil(contentH)) + outPad * 2, 16, 2048);
 
     std::vector<uint8_t> mask(static_cast<size_t>(outW) * outH, 0);
-    float xpos = static_cast<float>(outPad + (tp.italicShear < 0 ? 0 : shearExtra / 2));
+    std::vector<uint8_t> fgR(static_cast<size_t>(outW) * outH, tp.fillColor.r);
+    std::vector<uint8_t> fgG(static_cast<size_t>(outW) * outH, tp.fillColor.g);
+    std::vector<uint8_t> fgB(static_cast<size_t>(outW) * outH, tp.fillColor.b);
+    std::vector<uint8_t> fgAlphaScale(static_cast<size_t>(outW) * outH, tp.fillColor.a);
 
-    for (size_t i = 0; i < tp.text.size(); ++i) {
-        unsigned char ch = static_cast<unsigned char>(tp.text[i]);
-        int adv = 0, lsb = 0, x0 = 0, y0 = 0, x1 = 0, y1 = 0;
-        stbtt_GetCodepointHMetrics(&font, ch, &adv, &lsb);
-        float xShift = xpos - std::floor(xpos);
-        stbtt_GetCodepointBitmapBoxSubpixel(&font, ch, scale, scale, xShift, 0.0f, &x0, &y0, &x1, &y1);
-        int gw = x1 - x0, gh = y1 - y0;
-        if (gw > 0 && gh > 0) {
-            std::vector<uint8_t> gbmp(static_cast<size_t>(gw) * gh, 0);
-            stbtt_MakeCodepointBitmapSubpixel(&font, gbmp.data(), gw, gh, gw, scale, scale, xShift, 0.0f, ch);
-            int baseX = static_cast<int>(std::floor(xpos)) + x0;
-            int baseY = outPad + baseline + y0;
-            for (int gy = 0; gy < gh; ++gy) {
-                int dy = baseY + gy;
-                if (dy < 0 || dy >= outH) continue;
-                int shearDx = static_cast<int>(std::round((outPad + baseline - dy) * tp.italicShear));
-                for (int gx = 0; gx < gw; ++gx) {
-                    int dx = baseX + gx + shearDx;
-                    if (dx < 0 || dx >= outW) continue;
-                    uint8_t& m = mask[static_cast<size_t>(dy) * outW + dx];
-                    m = std::max(m, gbmp[static_cast<size_t>(gy) * gw + gx]);
+    const float startX = static_cast<float>(outPad + (tp.italicShear < 0 ? 0 : shearExtra / 2));
+    for (size_t li = 0; li < lines.size(); ++li) {
+        const TextLineSpan& ln = lines[li];
+        float xpos = startX;
+        float lineBaseY = static_cast<float>(outPad) + baselineOffset + static_cast<float>(li) * lineAdvance;
+
+        for (size_t i = ln.startIdx; i < ln.endIdx; ++i) {
+            if (tp.text[i] == '\r' || tp.text[i] == '\n') continue;
+            bool sc = false;
+            unsigned char ch = resolveChar(i, sc);
+            CharStyle cs{};
+            if (i < tp.charStyles.size()) cs = tp.charStyles[i];
+            float cScale = std::clamp(cs.scale, 0.1f, 4.0f) * (sc ? 0.78f : 1.0f);
+            float sx = baseScale * hMul * cScale;
+            float sy = baseScale * vMul * cScale;
+            Color4u8 chCol = cs.hasColor ? cs.color : tp.fillColor;
+
+            float drawX = xpos + cs.hOffsetPx;
+            float drawBaseY = lineBaseY - (tp.baselineShiftPx + cs.baselinePx);
+            int adv = 0, lsb = 0, x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+            stbtt_GetCodepointHMetrics(&font, ch, &adv, &lsb);
+            float xShift = drawX - std::floor(drawX);
+            stbtt_GetCodepointBitmapBoxSubpixel(&font, ch, sx, sy, xShift, 0.0f, &x0, &y0, &x1, &y1);
+            int gw = x1 - x0, gh = y1 - y0;
+
+            float boxMinX = drawX, boxMinY = drawBaseY - pixelH * vMul * 0.75f;
+            float boxMaxX = drawX + std::max(6.0f, adv * sx), boxMaxY = drawBaseY + pixelH * vMul * 0.2f;
+
+            if (gw > 0 && gh > 0) {
+                std::vector<uint8_t> gbmp(static_cast<size_t>(gw) * gh, 0);
+                stbtt_MakeCodepointBitmapSubpixel(&font, gbmp.data(), gw, gh, gw, sx, sy, xShift, 0.0f, ch);
+                int baseX = static_cast<int>(std::floor(drawX)) + x0;
+                int baseY = static_cast<int>(std::round(drawBaseY)) + y0;
+                float totalRot = tp.charRotateDeg + cs.rotDeg;
+
+                if (std::fabs(totalRot) <= 0.1f) {
+                    boxMinX = static_cast<float>(baseX);
+                    boxMinY = static_cast<float>(baseY);
+                    boxMaxX = static_cast<float>(baseX + gw);
+                    boxMaxY = static_cast<float>(baseY + gh);
+                    for (int gy = 0; gy < gh; ++gy) {
+                        int dy = baseY + gy;
+                        if (dy < 0 || dy >= outH) continue;
+                        int shearDx = static_cast<int>(std::round((drawBaseY - dy) * tp.italicShear));
+                        for (int gx = 0; gx < gw; ++gx) {
+                            int dx = baseX + gx + shearDx;
+                            if (dx < 0 || dx >= outW) continue;
+                            uint8_t val = gbmp[static_cast<size_t>(gy) * gw + gx];
+                            if (val == 0) continue;
+                            size_t pIdx = static_cast<size_t>(dy) * outW + dx;
+                            if (val >= mask[pIdx]) {
+                                mask[pIdx] = val;
+                                fgR[pIdx] = chCol.r;
+                                fgG[pIdx] = chCol.g;
+                                fgB[pIdx] = chCol.b;
+                                fgAlphaScale[pIdx] = chCol.a;
+                            }
+                        }
+                    }
+                } else {
+                    float rad = totalRot * kDeg2Rad;
+                    float csR = std::cos(rad), snR = std::sin(rad);
+                    float gcx = baseX + 0.5f * gw;
+                    float gcy = baseY + 0.5f * gh;
+                    int rBound = static_cast<int>(std::ceil(0.6f * std::hypot(static_cast<float>(gw), static_cast<float>(gh)))) + 2;
+                    int rx0 = std::clamp(static_cast<int>(gcx) - rBound, 0, outW - 1);
+                    int rx1 = std::clamp(static_cast<int>(gcx) + rBound, 0, outW - 1);
+                    int ry0 = std::clamp(static_cast<int>(gcy) - rBound, 0, outH - 1);
+                    int ry1 = std::clamp(static_cast<int>(gcy) + rBound, 0, outH - 1);
+                    boxMinX = static_cast<float>(rx0); boxMinY = static_cast<float>(ry0);
+                    boxMaxX = static_cast<float>(rx1 + 1); boxMaxY = static_cast<float>(ry1 + 1);
+                    for (int dy = ry0; dy <= ry1; ++dy) {
+                        for (int dx = rx0; dx <= rx1; ++dx) {
+                            float ox = (dx + 0.5f) - gcx;
+                            float oy = (dy + 0.5f) - gcy;
+                            float sgx = (ox * csR + oy * snR) + 0.5f * gw - 0.5f;
+                            float sgy = (-ox * snR + oy * csR) + 0.5f * gh - 0.5f;
+                            if (sgx < 0.0f || sgx > gw - 1.0f || sgy < 0.0f || sgy > gh - 1.0f) continue;
+                            int ix0 = static_cast<int>(sgx), iy0 = static_cast<int>(sgy);
+                            int ix1 = std::min(ix0 + 1, gw - 1), iy1 = std::min(iy0 + 1, gh - 1);
+                            float fx = sgx - ix0, fy = sgy - iy0;
+                            float v00 = gbmp[static_cast<size_t>(iy0) * gw + ix0];
+                            float v10 = gbmp[static_cast<size_t>(iy0) * gw + ix1];
+                            float v01 = gbmp[static_cast<size_t>(iy1) * gw + ix0];
+                            float v11 = gbmp[static_cast<size_t>(iy1) * gw + ix1];
+                            float fv = (v00 * (1.0f - fx) + v10 * fx) * (1.0f - fy) + (v01 * (1.0f - fx) + v11 * fx) * fy;
+                            uint8_t val = u8clamp(fv);
+                            if (val == 0) continue;
+                            size_t pIdx = static_cast<size_t>(dy) * outW + dx;
+                            if (val >= mask[pIdx]) {
+                                mask[pIdx] = val;
+                                fgR[pIdx] = chCol.r;
+                                fgG[pIdx] = chCol.g;
+                                fgB[pIdx] = chCol.b;
+                                fgAlphaScale[pIdx] = chCol.a;
+                            }
+                        }
+                    }
                 }
             }
+
+            if (outNormBoxes && i < outNormBoxes->size()) {
+                (*outNormBoxes)[i].uvMin = {boxMinX / outW, boxMinY / outH};
+                (*outNormBoxes)[i].uvMax = {boxMaxX / outW, boxMaxY / outH};
+            }
+
+            xpos += adv * sx + tp.tracking;
+            if (i + 1 < ln.endIdx && tp.text[i + 1] != '\n' && tp.text[i + 1] != '\r') {
+                bool sc2 = false;
+                unsigned char ch2 = resolveChar(i + 1, sc2);
+                xpos += stbtt_GetCodepointKernAdvance(&font, ch, ch2) * sx;
+            }
         }
-        xpos += adv * scale + tp.tracking;
-        if (i + 1 < tp.text.size()) {
-            xpos += stbtt_GetCodepointKernAdvance(&font, ch, static_cast<unsigned char>(tp.text[i + 1])) * scale;
+
+        if (tp.strikethrough && xpos > startX) {
+            int sy0 = std::clamp(static_cast<int>(std::round(lineBaseY - tp.baselineShiftPx - 0.34f * pixelH * vMul)), 0, outH - 1);
+            int sy1 = std::clamp(sy0 + std::max(2, static_cast<int>(std::round(pixelH * vMul * 0.065f))), 0, outH - 1);
+            int sx0 = std::clamp(static_cast<int>(std::floor(startX)), 0, outW - 1);
+            int sx1 = std::clamp(static_cast<int>(std::ceil(xpos)), 0, outW - 1);
+            for (int sy = sy0; sy <= sy1; ++sy) {
+                for (int sx = sx0; sx <= sx1; ++sx) {
+                    size_t pIdx = static_cast<size_t>(sy) * outW + sx;
+                    mask[pIdx] = 255;
+                    fgR[pIdx] = tp.fillColor.r;
+                    fgG[pIdx] = tp.fillColor.g;
+                    fgB[pIdx] = tp.fillColor.b;
+                    fgAlphaScale[pIdx] = tp.fillColor.a;
+                }
+            }
         }
     }
 
@@ -343,7 +539,8 @@ bool renderTextToBitmap(const TextLayerProps& tp, std::vector<uint8_t>& outRgba,
 
     for (int y = 0; y < outH; ++y) {
         for (int x = 0; x < outW; ++x) {
-            float fgA = mask[static_cast<size_t>(y) * outW + x] / 255.0f;
+            size_t pIdx = static_cast<size_t>(y) * outW + x;
+            float fgA = mask[pIdx] / 255.0f;
             float bgA = 0.0f;
             if (tp.outlineWidth > 0.25f) {
                 float r2 = tp.outlineWidth * tp.outlineWidth;
@@ -358,19 +555,19 @@ bool renderTextToBitmap(const TextLayerProps& tp, std::vector<uint8_t>& outRgba,
                     }
                 }
             }
-            size_t idx = (static_cast<size_t>(y) * outW + x) * 4;
+            size_t idx = pIdx * 4;
             if (bgA > 1e-4f && bgA > fgA) {
                 float comb = std::clamp(fgA + bgA * (1.0f - fgA), 0.0f, 1.0f);
                 float t = (comb > 1e-4f) ? (fgA / comb) : 0.0f;
-                outRgba[idx + 0] = u8clamp(tp.outlineColor.r * (1.0f - t) + tp.fillColor.r * t);
-                outRgba[idx + 1] = u8clamp(tp.outlineColor.g * (1.0f - t) + tp.fillColor.g * t);
-                outRgba[idx + 2] = u8clamp(tp.outlineColor.b * (1.0f - t) + tp.fillColor.b * t);
+                outRgba[idx + 0] = u8clamp(tp.outlineColor.r * (1.0f - t) + fgR[pIdx] * t);
+                outRgba[idx + 1] = u8clamp(tp.outlineColor.g * (1.0f - t) + fgG[pIdx] * t);
+                outRgba[idx + 2] = u8clamp(tp.outlineColor.b * (1.0f - t) + fgB[pIdx] * t);
                 outRgba[idx + 3] = u8clamp(comb * 255.0f);
             } else if (fgA > 1e-4f) {
-                outRgba[idx + 0] = tp.fillColor.r;
-                outRgba[idx + 1] = tp.fillColor.g;
-                outRgba[idx + 2] = tp.fillColor.b;
-                outRgba[idx + 3] = u8clamp(fgA * tp.fillColor.a);
+                outRgba[idx + 0] = fgR[pIdx];
+                outRgba[idx + 1] = fgG[pIdx];
+                outRgba[idx + 2] = fgB[pIdx];
+                outRgba[idx + 3] = u8clamp(fgA * fgAlphaScale[pIdx]);
             }
         }
     }
@@ -675,20 +872,160 @@ void CanvasEngine::resizeCanvas(int newSize) {
 }
 
 void CanvasEngine::scanSystemFonts() {
-    if (!systemFonts.empty()) return;
+    if (!systemFonts.empty() && !fontFamilies.empty()) return;
+    systemFonts.clear();
+    fontFamilies.clear();
     const std::string fontDir = "C:\\Windows\\Fonts";
     if (!std::filesystem::exists(fontDir)) return;
+
+    auto utf16BeToUtf8 = [](const uint8_t* bytes, int byteLen) -> std::string {
+        std::string out;
+        for (int i = 0; i + 1 < byteLen; i += 2) {
+            uint32_t cp = (static_cast<uint32_t>(bytes[i]) << 8) | bytes[i + 1];
+            if (cp == 0) continue;
+            if (cp < 0x80) {
+                out.push_back(static_cast<char>(cp));
+            } else if (cp < 0x800) {
+                out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+                out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+            } else {
+                out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+                out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+                out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+            }
+        }
+        return out;
+    };
+
+    auto readFontName = [&](const stbtt_fontinfo& info, int nameId) -> std::string {
+        int len = 0;
+        const char* p = stbtt_GetFontNameString(&info, &len, 3, 1, 0x0409, nameId);
+        if (!p || len <= 0) p = stbtt_GetFontNameString(&info, &len, 3, 10, 0x0409, nameId);
+        if (!p || len <= 0) p = stbtt_GetFontNameString(&info, &len, 3, 1, 0, nameId);
+        if (p && len > 0) return utf16BeToUtf8(reinterpret_cast<const uint8_t*>(p), len);
+        p = stbtt_GetFontNameString(&info, &len, 1, 0, 0, nameId);
+        if (p && len > 0) return std::string(p, static_cast<size_t>(len));
+        return {};
+    };
+
+    auto eqCI = [](const std::string& a, const std::string& b) {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i) {
+            if (std::tolower(static_cast<unsigned char>(a[i])) !=
+                std::tolower(static_cast<unsigned char>(b[i]))) return false;
+        }
+        return true;
+    };
+
+    std::unordered_map<std::string, size_t> famIndex;
+    std::vector<uint8_t> buf;
     for (const auto& entry : std::filesystem::directory_iterator(fontDir)) {
         if (!entry.is_regular_file()) continue;
         std::string ext = entry.path().extension().string();
         for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        if (ext == ".ttf" || ext == ".otf") {
-            systemFonts.push_back({entry.path().stem().string(), entry.path().string()});
+        if (ext != ".ttf" && ext != ".otf" && ext != ".ttc") continue;
+
+        std::string pathStr = entry.path().string();
+        std::string stem = entry.path().stem().string();
+        systemFonts.push_back({stem, pathStr});
+
+        std::ifstream ifs(pathStr, std::ios::binary);
+        if (!ifs.is_open()) continue;
+        buf.assign((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+        if (buf.size() < 12) continue;
+        int off = stbtt_GetFontOffsetForIndex(buf.data(), 0);
+        if (off < 0) continue;
+        stbtt_fontinfo info{};
+        if (!stbtt_InitFont(&info, buf.data(), off)) continue;
+
+        std::string fam = readFontName(info, 16);
+        if (fam.empty()) fam = readFontName(info, 1);
+        if (fam.empty()) fam = stem;
+
+        std::string sty = readFontName(info, 17);
+        if (sty.empty()) sty = readFontName(info, 2);
+        if (sty.empty()) sty = "Regular";
+
+        auto it = famIndex.find(fam);
+        if (it == famIndex.end()) {
+            famIndex[fam] = fontFamilies.size();
+            fontFamilies.push_back({fam, {{pathStr, stem, fam, sty}}});
+        } else {
+            auto& styles = fontFamilies[it->second].styles;
+            bool dup = false;
+            for (const auto& s : styles) {
+                if (eqCI(s.style, sty)) { dup = true; break; }
+            }
+            if (!dup) styles.push_back({pathStr, stem, fam, sty});
         }
     }
+
     std::sort(systemFonts.begin(), systemFonts.end(), [](const FontFaceInfo& a, const FontFaceInfo& b) {
         return a.displayName < b.displayName;
     });
+
+    auto lowerStr = [](std::string s) {
+        for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return s;
+    };
+    std::sort(fontFamilies.begin(), fontFamilies.end(), [&](const FontFamilyGroup& a, const FontFamilyGroup& b) {
+        return lowerStr(a.family) < lowerStr(b.family);
+    });
+    auto styleRank = [&](const std::string& st) {
+        std::string l = lowerStr(st);
+        if (l == "regular" || l == "normal") return 0;
+        if (l == "bold") return 1;
+        if (l == "italic" || l == "oblique") return 2;
+        if (l == "bold italic" || l == "bold oblique") return 3;
+        return 4;
+    };
+    for (auto& fg : fontFamilies) {
+        std::sort(fg.styles.begin(), fg.styles.end(), [&](const FontFaceEntry& a, const FontFaceEntry& b) {
+            int ra = styleRank(a.style), rb = styleRank(b.style);
+            if (ra != rb) return ra < rb;
+            return lowerStr(a.style) < lowerStr(b.style);
+        });
+    }
+}
+
+std::string CanvasEngine::findFontPath(const std::string& fontNameOrStem, const std::string& family,
+                                       const std::string& style) const {
+    auto eqCI = [](const std::string& a, const std::string& b) {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i) {
+            if (std::tolower(static_cast<unsigned char>(a[i])) !=
+                std::tolower(static_cast<unsigned char>(b[i]))) return false;
+        }
+        return true;
+    };
+
+    if (!family.empty()) {
+        for (const auto& fg : fontFamilies) {
+            if (eqCI(fg.family, family) && !fg.styles.empty()) {
+                if (!style.empty()) {
+                    for (const auto& st : fg.styles) {
+                        if (eqCI(st.style, style)) return st.filePath;
+                    }
+                }
+                return fg.styles[0].filePath;
+            }
+        }
+    }
+
+    if (!fontNameOrStem.empty()) {
+        if (std::filesystem::exists(fontNameOrStem)) return fontNameOrStem;
+        for (const auto& fg : fontFamilies) {
+            for (const auto& st : fg.styles) {
+                if (eqCI(st.stem, fontNameOrStem) || eqCI(fg.family, fontNameOrStem)) {
+                    return st.filePath;
+                }
+            }
+        }
+        for (const auto& fi : systemFonts) {
+            if (eqCI(fi.displayName, fontNameOrStem)) return fi.filePath;
+        }
+    }
+    return {};
 }
 
 int CanvasEngine::addLayer(const std::string& name, bool fillBg, Color4u8 bg) {
@@ -1006,13 +1343,17 @@ int CanvasEngine::addTextItem(const std::string& name, const TextLayerProps& pro
     item.kind = VectorItemKind::Text;
     item.text = props;
     if (item.text.fontPath.empty()) {
-        for (const auto& f : systemFonts) {
-            if (f.displayName == "ariblk" || f.displayName == "arialbd" || f.displayName == "impact") {
-                item.text.fontPath = f.filePath;
-                break;
+        item.text.fontPath = findFontPath("", item.text.fontFamily, item.text.fontStyle);
+        if (item.text.fontPath.empty()) {
+            for (const auto& f : systemFonts) {
+                if (f.displayName == "ariblk" || f.displayName == "arialbd" || f.displayName == "impact") {
+                    item.text.fontPath = f.filePath;
+                    break;
+                }
             }
         }
     }
+    item.text.syncCharStyles();
     layers[lIdx].items.push_back(std::move(item));
     activeLayerIdx = lIdx;
     selectedItemIdx = static_cast<int>(layers[lIdx].items.size()) - 1;
@@ -2576,7 +2917,12 @@ void CanvasEngine::rasterizeLayer(int layerIdx, const ObjMesh* mesh) {
 
     auto rasterizeText = [&](TextLayerProps& tp, Vec2* pCenter, Vec2* pHalf, bool* pHasBox, auto&& syncFn) {
         std::vector<uint8_t> bmp; int bw = 0, bh = 0;
-        if (!renderTextToBitmap(tp, bmp, bw, bh)) return;
+        std::vector<CharBoxUv> normBoxes;
+        if (!renderTextToBitmap(tp, bmp, bw, bh, &normBoxes)) {
+            tp.lastCharBoxesUv.clear();
+            return;
+        }
+        tp.lastCharBoxesUv.resize(normBoxes.size());
         if (tp.anchoredIn3D && mesh && mesh->loaded) {
             float wH = std::max(0.03f, tp.worldHeight);
             float wW = wH * (static_cast<float>(bw) / std::max(1, bh));
@@ -2588,6 +2934,18 @@ void CanvasEngine::rasterizeLayer(int layerIdx, const ObjMesh* mesh) {
                             wW, wH, tp.rotationDeg, false, {255, 255, 255, 255},
                             doMirror, mm, &newDirty, pCenter, pHalf, pHasBox);
             syncFn();
+            Vec2 cUv = pCenter ? *pCenter : tp.uvPos;
+            Vec2 hUv = (pHalf && pHasBox && *pHasBox) ? *pHalf : Vec2{0.08f, 0.04f};
+            for (size_t ci = 0; ci < normBoxes.size(); ++ci) {
+                tp.lastCharBoxesUv[ci].uvMin = {
+                    cUv.x + (normBoxes[ci].uvMin.x - 0.5f) * 2.0f * hUv.x,
+                    cUv.y + (normBoxes[ci].uvMin.y - 0.5f) * 2.0f * hUv.y
+                };
+                tp.lastCharBoxesUv[ci].uvMax = {
+                    cUv.x + (normBoxes[ci].uvMax.x - 0.5f) * 2.0f * hUv.x,
+                    cUv.y + (normBoxes[ci].uvMax.y - 0.5f) * 2.0f * hUv.y
+                };
+            }
         } else {
             float drawW = bw * uvScale, drawH = bh * uvScale;
             drawText2DToLayer(l, width, height, bmp, bw, bh, tp.uvPos, drawW, drawH, tp.rotationDeg, false, &newDirty);
@@ -2595,6 +2953,25 @@ void CanvasEngine::rasterizeLayer(int layerIdx, const ObjMesh* mesh) {
                 bool flipX = (tp.mirrorMode == MirrorTextMode::TrueFlip);
                 drawText2DToLayer(l, width, height, bmp, bw, bh, {1.0f - tp.uvPos.x, tp.uvPos.y},
                                   drawW, drawH, -tp.rotationDeg, flipX, &newDirty);
+            }
+            float uW = drawW / std::max(1, width);
+            float uH = drawH / std::max(1, height);
+            float rad = tp.rotationDeg * kDeg2Rad;
+            float cs = std::cos(rad), sn = std::sin(rad);
+            for (size_t ci = 0; ci < normBoxes.size(); ++ci) {
+                float lx0 = (normBoxes[ci].uvMin.x - 0.5f) * uW;
+                float ly0 = (normBoxes[ci].uvMin.y - 0.5f) * uH;
+                float lx1 = (normBoxes[ci].uvMax.x - 0.5f) * uW;
+                float ly1 = (normBoxes[ci].uvMax.y - 0.5f) * uH;
+                Vec2 corners[4] = {{lx0, ly0}, {lx1, ly0}, {lx1, ly1}, {lx0, ly1}};
+                Vec2 bMin{1e9f, 1e9f}, bMax{-1e9f, -1e9f};
+                for (const Vec2& c : corners) {
+                    Vec2 wc{tp.uvPos.x + (c.x * cs - c.y * sn), tp.uvPos.y + (c.x * sn + c.y * cs)};
+                    bMin.x = std::min(bMin.x, wc.x); bMin.y = std::min(bMin.y, wc.y);
+                    bMax.x = std::max(bMax.x, wc.x); bMax.y = std::max(bMax.y, wc.y);
+                }
+                tp.lastCharBoxesUv[ci].uvMin = bMin;
+                tp.lastCharBoxesUv[ci].uvMax = bMax;
             }
         }
     };
@@ -2989,11 +3366,25 @@ bool CanvasEngine::saveProject(const std::string& path, const std::string& meshP
         ofs.write(reinterpret_cast<const char*>(&tp.fillColor), sizeof(Color4u8) * 2);
         ofs.write(reinterpret_cast<const char*>(&tp.uvPos), sizeof(Vec2));
         ofs.write(reinterpret_cast<const char*>(&tp.pos3D), sizeof(Vec3) * 3);
-        uint8_t tf = (tp.anchoredIn3D ? 1 : 0) | (tp.mirrorX ? 2 : 0);
+        uint8_t tf = (tp.anchoredIn3D ? 1 : 0) | (tp.mirrorX ? 2 : 0) |
+                     (tp.isAreaBox ? 4 : 0) | (tp.allCaps ? 8 : 0) |
+                     (tp.smallCaps ? 16 : 0) | (tp.strikethrough ? 32 : 0);
         int mm = static_cast<int>(tp.mirrorMode);
         ofs.write(reinterpret_cast<const char*>(&tf), 1);
         ofs.write(reinterpret_cast<const char*>(&tp.rotationDeg), 4);
         ofs.write(reinterpret_cast<const char*>(&mm), 4);
+        writeStr(tp.fontFamily);
+        writeStr(tp.fontStyle);
+        ofs.write(reinterpret_cast<const char*>(&tp.boxWidthPx), sizeof(float) * 6);
+        ofs.write(reinterpret_cast<const char*>(&tp.selectedCharIdx), 4);
+        uint32_t csCnt = static_cast<uint32_t>(tp.charStyles.size());
+        ofs.write(reinterpret_cast<const char*>(&csCnt), 4);
+        for (const CharStyle& cs : tp.charStyles) {
+            uint8_t hc = cs.hasColor ? 1 : 0;
+            ofs.write(reinterpret_cast<const char*>(&hc), 1);
+            ofs.write(reinterpret_cast<const char*>(&cs.color), sizeof(Color4u8));
+            ofs.write(reinterpret_cast<const char*>(&cs.scale), sizeof(float) * 4);
+        }
     };
     auto writeDecal = [&](const DecalLayerProps& dp) {
         writeStr(dp.sourcePath);
@@ -3154,6 +3545,28 @@ bool CanvasEngine::loadProject(const std::string& path, std::string& outMeshPath
         tp.mirrorMode = static_cast<MirrorTextMode>(mm);
         if (!isCrm1 && tp.anchoredIn3D && tp.mirrorMode != MirrorTextMode::None) {
             tp.mirrorX = true;
+        }
+        if (isCrm1) {
+            tp.isAreaBox = (tf & 4) != 0;
+            tp.allCaps = (tf & 8) != 0;
+            tp.smallCaps = (tf & 16) != 0;
+            tp.strikethrough = (tf & 32) != 0;
+            readStr(tp.fontFamily);
+            readStr(tp.fontStyle);
+            ifs.read(reinterpret_cast<char*>(&tp.boxWidthPx), sizeof(float) * 6);
+            ifs.read(reinterpret_cast<char*>(&tp.selectedCharIdx), 4);
+            uint32_t csCnt = 0;
+            ifs.read(reinterpret_cast<char*>(&csCnt), 4);
+            if (csCnt <= 65536u) {
+                tp.charStyles.resize(csCnt);
+                for (uint32_t ci = 0; ci < csCnt; ++ci) {
+                    uint8_t hc = 0;
+                    ifs.read(reinterpret_cast<char*>(&hc), 1);
+                    tp.charStyles[ci].hasColor = (hc != 0);
+                    ifs.read(reinterpret_cast<char*>(&tp.charStyles[ci].color), sizeof(Color4u8));
+                    ifs.read(reinterpret_cast<char*>(&tp.charStyles[ci].scale), sizeof(float) * 4);
+                }
+            }
         }
     };
     auto readDecal = [&](DecalLayerProps& dp) {

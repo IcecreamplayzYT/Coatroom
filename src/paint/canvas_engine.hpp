@@ -59,6 +59,20 @@ struct StripeNode {
     bool smooth = true;
 };
 
+struct CharStyle {
+    bool hasColor = false;
+    Color4u8 color{255, 255, 255, 255};
+    float scale = 1.0f;
+    float baselinePx = 0.0f;
+    float hOffsetPx = 0.0f;
+    float rotDeg = 0.0f;
+};
+
+struct CharBoxUv {
+    Vec2 uvMin{0.0f, 0.0f};
+    Vec2 uvMax{0.0f, 0.0f};
+};
+
 struct TextLayerProps {
     std::string text = "Lorem ipsum";
     std::string fontPath;
@@ -77,6 +91,31 @@ struct TextLayerProps {
     float rotationDeg = 0.0f;
     MirrorTextMode mirrorMode = MirrorTextMode::ReadableBothSides;
     bool mirrorX = false;
+
+    std::string fontFamily = "Arial";
+    std::string fontStyle = "Bold";
+    bool isAreaBox = false;
+    float boxWidthPx = 420.0f;
+    float boxHeightPx = 160.0f;
+    float hScalePct = 100.0f;
+    float vScalePct = 100.0f;
+    float baselineShiftPx = 0.0f;
+    float charRotateDeg = 0.0f;
+    bool allCaps = false;
+    bool smallCaps = false;
+    bool strikethrough = false;
+    int selectedCharIdx = -1;
+    std::vector<CharStyle> charStyles;
+    std::vector<CharBoxUv> lastCharBoxesUv;
+
+    void syncCharStyles() {
+        if (charStyles.size() != text.size()) {
+            charStyles.resize(text.size());
+        }
+        if (selectedCharIdx >= static_cast<int>(text.size())) {
+            selectedCharIdx = text.empty() ? -1 : static_cast<int>(text.size()) - 1;
+        }
+    }
 };
 
 struct DecalLayerProps {
@@ -163,6 +202,18 @@ struct VectorItem {
 struct FontFaceInfo {
     std::string displayName;
     std::string filePath;
+};
+
+struct FontFaceEntry {
+    std::string filePath;
+    std::string stem;
+    std::string family;
+    std::string style;
+};
+
+struct FontFamilyGroup {
+    std::string family;
+    std::vector<FontFaceEntry> styles;
 };
 
 struct DirtyRect {
@@ -313,6 +364,9 @@ public:
     // Font scanning from C:\Windows\Fonts
     void scanSystemFonts();
     const std::vector<FontFaceInfo>& fonts() const { return systemFonts; }
+    std::string findFontPath(const std::string& fontNameOrStem, const std::string& family = "",
+                             const std::string& style = "") const;
+    std::vector<FontFamilyGroup> fontFamilies;
 
     // Painting tools
     void beginStroke(int layerIdx);

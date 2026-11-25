@@ -30,6 +30,7 @@ enum class StudioTool {
     HandPan,
     Zoom,
     BeautyRender,
+    TouchType,
     COUNT,
     // Clean Coatroom v1.2 Adobe tool aliases (share underlying enum indices)
     Select = SelectMove,
@@ -150,7 +151,11 @@ struct UvViewportState {
         None = 0,
         Move,
         ScaleCorner,
-        Rotate
+        Rotate,
+        BoxResizeEdge,
+        TouchCharMove,
+        TouchCharScale,
+        TouchCharRotate
     };
     GizmoDragMode gizmoMode = GizmoDragMode::None;
     int gizmoCornerIdx = -1;
@@ -159,14 +164,20 @@ struct UvViewportState {
     Vec2 gizmoOrigUvScale{0.18f, 0.18f};
     float gizmoOrigFontSize = 110.0f;
     float gizmoOrigRotDeg = 0.0f;
+    float gizmoOrigBoxW = 420.0f;
+    float gizmoOrigBoxH = 160.0f;
+    float gizmoOrigCharScale = 1.0f;
+    float gizmoOrigCharBaseline = 0.0f;
+    float gizmoOrigCharHOffset = 0.0f;
     double lastLiveRasterTime = 0.0;
 };
 
 struct RecentProjectEntry {
     std::string name;
     std::string path;
-    std::string kind;   // ".cr" or ".obj"
-    std::string detail; // e.g. "4096x4096 | Modified ..."
+    std::string kind;      // ".cr" or ".obj"
+    std::string detail;    // e.g. "4096x4096 | Modified ..."
+    std::string thumbPath; // cached Front 3/4th beauty thumbnail PNG on disk
     ImTextureID thumbTex = 0;
 };
 
@@ -266,6 +277,7 @@ struct StudioUiState {
     bool otaUpdateAvailable = false;
     std::string otaLatestVersion;
     int activePenToolVariant = 0; // 0=Pen (CurveBlade), 1=Line (StraightRuler)
+    int activeTypeToolVariant = 0; // 0=Type (Text), 1=Touch Type (TouchType)
     int activeNavToolVariant = 0; // 0=Hand (HandPan), 1=Zoom
     std::vector<Color4u8> customSwatches;
 

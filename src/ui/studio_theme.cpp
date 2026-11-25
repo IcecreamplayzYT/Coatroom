@@ -371,6 +371,19 @@ void drawToolIcon(ImDrawList* dl, StudioTool tool, const ImVec2& minP, const ImV
         dl->AddCircleFilled(c, gSz.x * 0.06f, color, 10);
         break;
     }
+    case StudioTool::TouchType: {
+        ImVec2 bMin = P(0.16f, 0.18f), bMax = P(0.84f, 0.82f);
+        dl->AddRect(bMin, bMax, color, 0.0f, 1.1f);
+        float hs = 1.8f;
+        dl->AddRectFilled(bMin - ImVec2(hs, hs), bMin + ImVec2(hs, hs), color);
+        dl->AddRectFilled(ImVec2(bMax.x - hs, bMin.y - hs), ImVec2(bMax.x + hs, bMin.y + hs), color);
+        dl->AddRectFilled(bMax - ImVec2(hs, hs), bMax + ImVec2(hs, hs), color);
+        dl->AddRectFilled(ImVec2(bMin.x - hs, bMax.y - hs), ImVec2(bMin.x + hs, bMax.y + hs), color);
+        dl->AddLine(P(0.32f, 0.34f), P(0.68f, 0.34f), color, 1.8f);
+        dl->AddLine(P(0.50f, 0.34f), P(0.50f, 0.70f), color, 1.8f);
+        dl->AddLine(P(0.41f, 0.70f), P(0.59f, 0.70f), color, 1.4f);
+        break;
+    }
     default:
         break;
     }
@@ -560,6 +573,7 @@ const char* toolDisplayName(StudioTool tool) {
     case StudioTool::HandPan:       return "Hand Tool";
     case StudioTool::Zoom:          return "Zoom Tool";
     case StudioTool::BeautyRender:  return "Render Photo";
+    case StudioTool::TouchType:     return "Touch Type Tool";
     default:                        return "Tool";
     }
 }
@@ -583,6 +597,7 @@ const char* toolShortcutHint(StudioTool tool) {
     case StudioTool::HandPan:       return "H";
     case StudioTool::Zoom:          return "Z";
     case StudioTool::BeautyRender:  return "F12";
+    case StudioTool::TouchType:     return "Shift+T";
     default:                        return "";
     }
 }
@@ -602,7 +617,8 @@ const char* toolRichDescription(int toolOrMirrorIdx) {
     case StudioTool::Eraser:        return "Erase paint non-destructively from the active paint buffer on 3D surface or 2D UV.";
     case StudioTool::FloodFill:     return "Fill contiguous areas with the current Fill color matching within the tolerance threshold.";
     case StudioTool::Eyedropper:    return "Sample any color under the cursor directly from the composite livery canvas.";
-    case StudioTool::Text:          return "Place live editable vector typography from Windows system fonts directly on car or UV.";
+    case StudioTool::Text:          return "Click for Point Type or drag an Area Type box; resize handles reflow wrapped text.";
+    case StudioTool::TouchType:     return "Adjust individual characters' scale, position, rotation, and color directly.";
     case StudioTool::SponsorDecal:  return "Place or paste crisp RGBA PNG/JPG decals and sponsor crests aligned to the car surface.";
     case StudioTool::VertexEdit:    return "Select and sculpt welded 3D vertices with optional bilateral X=0 symmetry.";
     case StudioTool::FacePaintMask: return "Paint-select connected body panels to isolate Paint, Fill, or Eraser strokes.";
@@ -765,6 +781,20 @@ void drawRichTooltipCard(ImDrawList* dl, const ImVec2& pos, int toolOrMirrorIdx,
             dl->AddRect(bMin, bMax, cyanAcc, 0.0f, 1.3f);
             dl->AddText(SP(0.33f, 0.44f), wht, "Lorem ipsum");
             drawCursorArrow(bMax);
+            break;
+        }
+        case StudioTool::TouchType: {
+            float lift = 0.12f * (0.5f - 0.5f * std::cos(loopT * 6.28318f));
+            dl->AddText(SP(0.26f, 0.48f), IM_COL32(210, 214, 220, 200), "T");
+            dl->AddText(SP(0.41f, 0.48f), IM_COL32(210, 214, 220, 200), "y");
+            dl->AddText(SP(0.68f, 0.48f), IM_COL32(210, 214, 220, 200), "e");
+            ImVec2 chMin = SP(0.51f, 0.34f - lift);
+            ImVec2 chMax = SP(0.64f, 0.68f - lift);
+            dl->AddRect(chMin, chMax, cyanAcc, 0.0f, 1.3f);
+            dl->AddRectFilled(chMin - ImVec2(2.5f, 2.5f), chMin + ImVec2(2.5f, 2.5f), wht);
+            dl->AddRectFilled(chMax - ImVec2(2.5f, 2.5f), chMax + ImVec2(2.5f, 2.5f), wht);
+            dl->AddText(SP(0.54f, 0.43f - lift), IM_COL32(0x2F, 0xE6, 0xCE, 0xFF), "p");
+            drawCursorArrow(chMax);
             break;
         }
         case StudioTool::SponsorDecal: {

@@ -125,10 +125,14 @@ void triggerFillPlaceholderText(StudioUiState& state, CanvasEngine& canvas, cons
     tp.text = "Lorem ipsum";
     tp.uvPos = Vec2{0.5f, 0.5f};
     tp.anchoredIn3D = false;
+    tp.fontFamily = "Arial";
+    tp.fontStyle = "Bold";
+    tp.fontPath = canvas.findFontPath("", tp.fontFamily, tp.fontStyle);
     tp.fillColor = state.brush.color;
     tp.outlineColor = state.secondaryColor;
     tp.mirrorX = state.brush.mirrorX;
     tp.mirrorMode = state.brush.mirrorX ? MirrorTextMode::ReadableBothSides : MirrorTextMode::None;
+    tp.syncCharStyles();
     int newItemIdx = canvas.addTextItem("Text Layer", tp, &mesh);
     canvas.selectedItemIdx = newItemIdx;
     if (VectorItem* created = canvas.activeVectorItem()) {
@@ -136,6 +140,7 @@ void triggerFillPlaceholderText(StudioUiState& state, CanvasEngine& canvas, cons
         state.textEditSyncedLayerId = created->id;
     }
     state.activeTool = StudioTool::Text;
+    state.activeTypeToolVariant = 0;
     state.activePropsCat = PropertiesCategory::Text;
     if (callbacks.onCanvasModified) callbacks.onCanvasModified();
 }
@@ -147,11 +152,21 @@ void syncActiveLayerColors(const StudioUiState& state, CanvasEngine& canvas,
     if (idx < 0 || idx >= static_cast<int>(canvas.layers.size())) return;
     Layer& l = canvas.layers[idx];
     if (l.locked) return;
+    auto applyTextCol = [&](TextLayerProps& tx) {
+        if (strokeWasEdited) {
+            tx.outlineColor = state.secondaryColor;
+        } else if (tx.selectedCharIdx >= 0 && tx.selectedCharIdx < static_cast<int>(tx.text.size())) {
+            tx.syncCharStyles();
+            tx.charStyles[tx.selectedCharIdx].hasColor = true;
+            tx.charStyles[tx.selectedCharIdx].color = state.brush.color;
+        } else {
+            tx.fillColor = state.brush.color;
+        }
+    };
     if (VectorItem* it = canvas.activeVectorItem()) {
         if (it->locked) return;
         if (it->kind == VectorItemKind::Text) {
-            if (strokeWasEdited) it->text.outlineColor = state.secondaryColor;
-            else it->text.fillColor = state.brush.color;
+            applyTextCol(it->text);
             canvas.rasterizeLayer(idx, &mesh);
             if (callbacks.onCanvasModified) callbacks.onCanvasModified();
             return;
@@ -176,8 +191,7 @@ void syncActiveLayerColors(const StudioUiState& state, CanvasEngine& canvas,
         }
     }
     if (l.kind == LayerKind::Text) {
-        if (strokeWasEdited) l.text.outlineColor = state.secondaryColor;
-        else l.text.fillColor = state.brush.color;
+        applyTextCol(l.text);
         canvas.rasterizeLayer(idx, &mesh);
         if (callbacks.onCanvasModified) callbacks.onCanvasModified();
     } else if (l.kind == LayerKind::RulerStripe) {
@@ -595,6 +609,105 @@ void drawRectSubpanel(StudioUiState& state, CanvasEngine& canvas, const ObjMesh&
     }
 }
 
+bool equalsCaseInsensitive(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+        if (std::tolower(static_cast<unsigned char>(a[i])) !=
+            std::tolower(static_cast<unsigned char>(b[i]))) return false;
+    }
+    return true;
+}
+
+bool drawGroupedFontPickers(StudioUiState& state, CanvasEngine& canvas, TextLayerProps& tx,
+                            float famWidth, float styleWidth, bool sameLineStyle, const char* idPrefix) {
+    if (canvas.fontFamilies.empty()) canvas.scanSystemFonts();
+
+    const FontFamilyGroup* curFam = nullptr;
+    for (const FontFamilyGroup& fg : canvas.fontFamilies) {
+        if (!tx.fontPath.empty()) {
+            for (const FontFaceEntry& st : fg.styles) {
+                if (st.filePath == tx.fontPath) {
+                    curFam = &fg;
+                    tx.fontFamily = fg.family;
+                    tx.fontStyle = st.style;
+                    break;
+                }
+            }
+        }
+        if (curFam) break;
+    }
+    if (!curFam) {
+        for (const FontFamilyGroup& fg : canvas.fontFamilies) {
+            if (equalsCaseInsensitive(fg.family, tx.fontFamily)) {
+                curFam = &fg;
+                break;
+            }
+        }
+    }
+    if (!curFam && !canvas.fontFamilies.empty()) curFam = &canvas.fontFamilies[0];
+
+    std::string famLbl = curFam ? curFam->family : (tx.fontFamily.empty() ? "Arial" : tx.fontFamily);
+    std::string styLbl = tx.fontStyle.empty() ? "Regular" : tx.fontStyle;
+    bool changed = false;
+
+    char famId[48], styId[48];
+    std::snprintf(famId, sizeof(famId), "##%sFam", idPrefix);
+    std::snprintf(styId, sizeof(styId), "##%sSty", idPrefix);
+
+    ImGui::SetNextItemWidth(famWidth);
+    if (ImGui::BeginCombo(famId, famLbl.c_str())) {
+        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::InputTextWithHint("##FamFilter", "Filter font families...", state.fontSearchBuf,
+                                 sizeof(state.fontSearchBuf));
+        for (const FontFamilyGroup& fg : canvas.fontFamilies) {
+            if (!containsCaseInsensitive(fg.family, state.fontSearchBuf)) continue;
+            bool sel = (curFam == &fg);
+            if (ImGui::Selectable(fg.family.c_str(), sel) && !fg.styles.empty()) {
+                canvas.pushUndoSnapshot();
+                const FontFaceEntry* chosen = nullptr;
+                for (const FontFaceEntry& st : fg.styles) {
+                    if (equalsCaseInsensitive(st.style, tx.fontStyle)) { chosen = &st; break; }
+                }
+                if (!chosen) {
+                    for (const FontFaceEntry& st : fg.styles) {
+                        if (equalsCaseInsensitive(st.style, "Regular")) { chosen = &st; break; }
+                    }
+                }
+                if (!chosen) chosen = &fg.styles[0];
+                tx.fontFamily = fg.family;
+                tx.fontStyle = chosen->style;
+                tx.fontPath = chosen->filePath;
+                curFam = &fg;
+                changed = true;
+            }
+            if (sel) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    itemTooltip("Font Family (1)");
+
+    if (sameLineStyle) ImGui::SameLine();
+    ImGui::SetNextItemWidth(styleWidth);
+    if (ImGui::BeginCombo(styId, styLbl.c_str())) {
+        if (curFam) {
+            for (const FontFaceEntry& st : curFam->styles) {
+                bool sel = (tx.fontPath == st.filePath) || equalsCaseInsensitive(tx.fontStyle, st.style);
+                if (ImGui::Selectable(st.style.c_str(), sel)) {
+                    canvas.pushUndoSnapshot();
+                    tx.fontFamily = curFam->family;
+                    tx.fontStyle = st.style;
+                    tx.fontPath = st.filePath;
+                    changed = true;
+                }
+                if (sel) ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    itemTooltip("Font Weight / Style (2)");
+    return changed;
+}
+
 void drawTextSubpanel(StudioUiState& state, CanvasEngine& canvas, const ObjMesh& mesh,
                       const StudioCallbacks& callbacks) {
     int idx = canvas.activeLayerIdx;
@@ -611,7 +724,7 @@ void drawTextSubpanel(StudioUiState& state, CanvasEngine& canvas, const ObjMesh&
     }
     if (!pTx) {
         ImGui::TextColored(StudioColors::ToVec4(StudioColors::TextMuted),
-                           "Click canvas with Type (T) tool.");
+                           "Click for Point Type or drag an Area Box (T).");
         if (ImGui::Button("Create Lorem ipsum Text", ImVec2(-1.0f, 0.0f))) {
             triggerFillPlaceholderText(state, canvas, mesh, callbacks);
         }
@@ -619,6 +732,7 @@ void drawTextSubpanel(StudioUiState& state, CanvasEngine& canvas, const ObjMesh&
     }
 
     TextLayerProps& tx = *pTx;
+    tx.syncCharStyles();
     if (state.textEditSyncedLayerId != uid) {
         std::snprintf(state.textEditBuf, sizeof(state.textEditBuf), "%s", tx.text.c_str());
         state.textEditSyncedLayerId = uid;
@@ -628,46 +742,28 @@ void drawTextSubpanel(StudioUiState& state, CanvasEngine& canvas, const ObjMesh&
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 58.0f);
     if (ImGui::InputText("##TextBuf", state.textEditBuf, sizeof(state.textEditBuf))) {
         tx.text = state.textEditBuf;
+        tx.syncCharStyles();
         changed = true;
     }
     if (ImGui::IsItemActivated()) canvas.pushUndoSnapshot();
-    itemTooltip("Live Sponsor / Livery Typography Text");
+    itemTooltip("Live Typography Content");
     ImGui::SameLine();
     if (ImGui::Button("Lorem", ImVec2(-1.0f, 0.0f))) {
         canvas.pushUndoSnapshot();
         tx.text = "Lorem ipsum";
+        tx.syncCharStyles();
         std::snprintf(state.textEditBuf, sizeof(state.textEditBuf), "%s", tx.text.c_str());
         changed = true;
     }
     itemTooltip("Fill with Placeholder Text (Lorem ipsum)");
 
-    if (canvas.fonts().empty()) canvas.scanSystemFonts();
-    std::string curFontLabel = tx.fontPath.empty()
-                               ? "Arial Bold"
-                               : std::filesystem::path(tx.fontPath).stem().string();
-    ImGui::SetNextItemWidth(-1.0f);
-    if (ImGui::BeginCombo("##FontCombo", curFontLabel.c_str())) {
-        ImGui::SetNextItemWidth(-1.0f);
-        ImGui::InputTextWithHint("##FontSearch", "Filter fonts...", state.fontSearchBuf,
-                                 sizeof(state.fontSearchBuf));
-        for (const FontFaceInfo& ff : canvas.fonts()) {
-            if (!containsCaseInsensitive(ff.displayName, state.fontSearchBuf)) continue;
-            bool isSel = (tx.fontPath == ff.filePath);
-            if (ImGui::Selectable(ff.displayName.c_str(), isSel)) {
-                canvas.pushUndoSnapshot();
-                tx.fontPath = ff.filePath;
-                changed = true;
-            }
-            if (isSel) ImGui::SetItemDefaultFocus();
-        }
-        ImGui::EndCombo();
-    }
-    itemTooltip("Typeface (C:\\Windows\\Fonts)");
+    // Adobe Character Panel (1) Family & (2) Style stacked cleanly
+    changed |= drawGroupedFontPickers(state, canvas, tx, -1.0f, -1.0f, false, "Char");
 
     if (ImGui::BeginTable("##TextGrid", 2, ImGuiTableFlags_SizingStretchSame)) {
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
-        changed |= compactScrubFloat("Size", "##TxSz", &tx.fontSizePx, 1.0f, 12.0f, 512.0f, "%.0f px", "Font Height (px)");
+        changed |= compactScrubFloat("Size", "##TxSz", &tx.fontSizePx, 1.0f, 8.0f, 512.0f, "%.0f px", "Font Height (px)");
         if (ImGui::IsItemActivated()) canvas.pushUndoSnapshot();
         ImGui::TableSetColumnIndex(1);
         changed |= compactScrubFloat("3D H", "##Tx3H", &tx.worldHeight, 0.005f, 0.03f, 1.50f, "%.2f m", "Projected 3D Height (m)");
@@ -675,10 +771,26 @@ void drawTextSubpanel(StudioUiState& state, CanvasEngine& canvas, const ObjMesh&
 
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
-        changed |= compactScrubFloat("Track", "##TxTrk", &tx.tracking, 0.4f, -20.0f, 80.0f, "%.1f", "Letter Spacing");
+        changed |= compactScrubFloat("Track", "##TxTrk", &tx.tracking, 0.4f, -20.0f, 80.0f, "%.1f", "Tracking / Letter Spacing");
         if (ImGui::IsItemActivated()) canvas.pushUndoSnapshot();
         ImGui::TableSetColumnIndex(1);
-        changed |= compactScrubFloat("Tilt", "##TxIt", &tx.italicShear, 0.01f, -0.50f, 0.50f, "%.2f", "Italic Shear");
+        changed |= compactScrubFloat("Tilt", "##TxIt", &tx.italicShear, 0.01f, -0.50f, 0.50f, "%.2f", "Oblique / Italic Shear");
+        if (ImGui::IsItemActivated()) canvas.pushUndoSnapshot();
+
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        changed |= compactScrubFloat("V-Sc", "##TxVSc", &tx.vScalePct, 1.0f, 20.0f, 300.0f, "%.0f%%", "Vertical Scale (%)");
+        if (ImGui::IsItemActivated()) canvas.pushUndoSnapshot();
+        ImGui::TableSetColumnIndex(1);
+        changed |= compactScrubFloat("H-Sc", "##TxHSc", &tx.hScalePct, 1.0f, 20.0f, 300.0f, "%.0f%%", "Horizontal Scale (%)");
+        if (ImGui::IsItemActivated()) canvas.pushUndoSnapshot();
+
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        changed |= compactScrubFloat("Base", "##TxBas", &tx.baselineShiftPx, 0.5f, -150.0f, 150.0f, "%.1f px", "Baseline Shift");
+        if (ImGui::IsItemActivated()) canvas.pushUndoSnapshot();
+        ImGui::TableSetColumnIndex(1);
+        changed |= compactScrubFloat("ChRot", "##TxCRot", &tx.charRotateDeg, 1.0f, -180.0f, 180.0f, "%.0f deg", "Character Rotation");
         if (ImGui::IsItemActivated()) canvas.pushUndoSnapshot();
 
         ImGui::TableNextRow();
@@ -686,14 +798,161 @@ void drawTextSubpanel(StudioUiState& state, CanvasEngine& canvas, const ObjMesh&
         changed |= compactScrubFloat("Out", "##TxOut", &tx.outlineWidth, 0.2f, 0.0f, 24.0f, "%.1f px", "Stroke Outline Width");
         if (ImGui::IsItemActivated()) canvas.pushUndoSnapshot();
         ImGui::TableSetColumnIndex(1);
-        changed |= compactScrubFloat("Rot", "##TxRot", &tx.rotationDeg, 1.0f, -180.0f, 180.0f, "%.0f deg", "Rotation Angle");
+        changed |= compactScrubFloat("Rot", "##TxRot", &tx.rotationDeg, 1.0f, -180.0f, 180.0f, "%.0f deg", "Block Rotation Angle");
         if (ImGui::IsItemActivated()) canvas.pushUndoSnapshot();
         ImGui::EndTable();
     }
 
+    // Adobe Style Toggles Row: TT All Caps | Tt Small Caps | Strike | Area Box
+    float togW = (ImGui::GetContentRegionAvail().x - 12.0f) / 4.0f;
+    if (flatTogglePill("TT", tx.allCaps, false, ImVec2(togW, 0))) {
+        canvas.pushUndoSnapshot();
+        tx.allCaps = !tx.allCaps;
+        if (tx.allCaps) tx.smallCaps = false;
+        changed = true;
+    }
+    itemTooltip("All Caps");
+    ImGui::SameLine(0.0f, 4.0f);
+    if (flatTogglePill("Tt", tx.smallCaps, false, ImVec2(togW, 0))) {
+        canvas.pushUndoSnapshot();
+        tx.smallCaps = !tx.smallCaps;
+        if (tx.smallCaps) tx.allCaps = false;
+        changed = true;
+    }
+    itemTooltip("Small Caps");
+    ImGui::SameLine(0.0f, 4.0f);
+    if (flatTogglePill("Strike", tx.strikethrough, false, ImVec2(togW, 0))) {
+        canvas.pushUndoSnapshot();
+        tx.strikethrough = !tx.strikethrough;
+        changed = true;
+    }
+    itemTooltip("Strikethrough");
+    ImGui::SameLine(0.0f, 4.0f);
+    if (flatTogglePill("Area Box", tx.isAreaBox, false, ImVec2(togW, 0))) {
+        canvas.pushUndoSnapshot();
+        tx.isAreaBox = !tx.isAreaBox;
+        changed = true;
+    }
+    itemTooltip("Area Type Text Box (Reflow & Resize Bounds)");
+
+    if (tx.isAreaBox) {
+        if (ImGui::BeginTable("##AreaBoxGrid", 2, ImGuiTableFlags_SizingStretchSame)) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            changed |= compactScrubFloat("Box W", "##TxBW", &tx.boxWidthPx, 2.0f, 40.0f, 4096.0f, "%.0f px", "Area Text Box Width");
+            if (ImGui::IsItemActivated()) canvas.pushUndoSnapshot();
+            ImGui::TableSetColumnIndex(1);
+            changed |= compactScrubFloat("Box H", "##TxBH", &tx.boxHeightPx, 2.0f, 24.0f, 4096.0f, "%.0f px", "Area Text Box Height");
+            if (ImGui::IsItemActivated()) canvas.pushUndoSnapshot();
+            ImGui::EndTable();
+        }
+    }
+
+    ImGui::Separator();
+    ImGui::TextColored(StudioColors::ToVec4(StudioColors::TextSecondary), "Per-Letter Color & Style");
+    ImGui::SameLine(ImGui::GetContentRegionAvail().x - 106.0f);
+    if (flatTogglePill("All", tx.selectedCharIdx < 0, false, ImVec2(32.0f, 18.0f))) {
+        tx.selectedCharIdx = -1;
+    }
+    itemTooltip("Edit Whole String");
+    ImGui::SameLine(0.0f, 4.0f);
+    if (flatTogglePill("Touch", state.activeTool == StudioTool::TouchType, false, ImVec2(66.0f, 18.0f))) {
+        state.activeTool = StudioTool::TouchType;
+        state.activeTypeToolVariant = 1;
+        state.activePropsCat = PropertiesCategory::Text;
+    }
+    itemTooltip("Touch Type Tool (Shift+T) - Transform Individual Letters on Canvas");
+
+    // Interactive per-character tile strip
+    float availStripW = ImGui::GetContentRegionAvail().x;
+    float curX = 0.0f;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(2.0f, 2.0f));
+    for (int ci = 0; ci < static_cast<int>(tx.text.size()); ++ci) {
+        if (ci > 0 && curX + 22.0f <= availStripW) {
+            ImGui::SameLine();
+        } else if (ci > 0) {
+            curX = 0.0f;
+        }
+        char c = tx.text[ci];
+        char lbl[8] = { (c == ' ' || c == '\t' || c == '\n') ? '_' : c, '#', '#', 0 };
+        bool cSel = (tx.selectedCharIdx == ci);
+        ImGui::PushID(1200 + ci);
+        ImVec2 bp = ImGui::GetCursorScreenPos();
+        ImVec4 bg = cSel ? StudioColors::ToVec4(StudioColors::ToolActiveBg) : StudioColors::ToVec4(StudioColors::ControlBg);
+        ImVec4 brd = cSel ? StudioColors::ToVec4(StudioColors::AmberAccent) : StudioColors::ToVec4(StudioColors::BorderLight);
+        ImGui::PushStyleColor(ImGuiCol_Button, bg);
+        ImGui::PushStyleColor(ImGuiCol_Border, brd);
+        if (ImGui::Button("##ch", ImVec2(20.0f, 22.0f))) {
+            tx.selectedCharIdx = cSel ? -1 : ci;
+        }
+        ImGui::PopStyleColor(2);
+        Color4u8 dispCol = (ci < static_cast<int>(tx.charStyles.size()) && tx.charStyles[ci].hasColor)
+                           ? tx.charStyles[ci].color
+                           : tx.fillColor;
+        char glyphBuf[2] = { lbl[0], 0 };
+        ImVec2 gSz = ImGui::CalcTextSize(glyphBuf);
+        dl->AddText(ImVec2(bp.x + (20.0f - gSz.x) * 0.5f, bp.y + 1.0f), StudioColors::TextPrimary, glyphBuf);
+        dl->AddRectFilled(ImVec2(bp.x + 2.0f, bp.y + 17.0f), ImVec2(bp.x + 18.0f, bp.y + 20.0f), toImU32(dispCol), 1.0f);
+        ImGui::PopID();
+        curX += 22.0f;
+    }
+    ImGui::PopStyleVar();
+
+    if (tx.selectedCharIdx >= 0 && tx.selectedCharIdx < static_cast<int>(tx.charStyles.size())) {
+        CharStyle& cs = tx.charStyles[tx.selectedCharIdx];
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, StudioColors::ToVec4(StudioColors::PanelHeader));
+        if (ImGui::BeginChild("##SelCharBox", ImVec2(-1.0f, 78.0f), ImGuiChildFlags_Borders)) {
+            char chDisp = tx.text[tx.selectedCharIdx];
+            Color4u8 editCol = cs.hasColor ? cs.color : tx.fillColor;
+            if (colorEdit4u8("##SelChCol", editCol, true)) {
+                cs.hasColor = true;
+                cs.color = editCol;
+                changed = true;
+            }
+            if (ImGui::IsItemActivated()) canvas.pushUndoSnapshot();
+            itemTooltip("Override Color for Selected Letter");
+            ImGui::SameLine();
+            ImGui::TextColored(StudioColors::ToVec4(StudioColors::AmberAccent),
+                               "Letter #%d '%c'", tx.selectedCharIdx + 1,
+                               (chDisp == ' ' ? '_' : chDisp));
+            ImGui::SameLine(ImGui::GetContentRegionAvail().x - 46.0f);
+            if (ImGui::Button("Reset", ImVec2(46.0f, 18.0f))) {
+                canvas.pushUndoSnapshot();
+                cs = CharStyle{};
+                changed = true;
+            }
+
+            if (ImGui::BeginTable("##CharStyGrid", 2, ImGuiTableFlags_SizingStretchSame)) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                float scPct = cs.scale * 100.0f;
+                if (compactScrubFloat("Scale", "##CsSc", &scPct, 1.0f, 20.0f, 300.0f, "%.0f%%", "Letter Scale")) {
+                    cs.scale = std::clamp(scPct * 0.01f, 0.2f, 3.0f);
+                    changed = true;
+                }
+                if (ImGui::IsItemActivated()) canvas.pushUndoSnapshot();
+                ImGui::TableSetColumnIndex(1);
+                changed |= compactScrubFloat("Rot", "##CsRot", &cs.rotDeg, 1.0f, -180.0f, 180.0f, "%.0f deg", "Letter Rotation");
+                if (ImGui::IsItemActivated()) canvas.pushUndoSnapshot();
+
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                changed |= compactScrubFloat("Base", "##CsBas", &cs.baselinePx, 0.5f, -150.0f, 150.0f, "%.1f px", "Letter Baseline Offset");
+                if (ImGui::IsItemActivated()) canvas.pushUndoSnapshot();
+                ImGui::TableSetColumnIndex(1);
+                changed |= compactScrubFloat("X Off", "##CsHOff", &cs.hOffsetPx, 0.5f, -150.0f, 150.0f, "%.1f px", "Letter Horizontal Nudge");
+                if (ImGui::IsItemActivated()) canvas.pushUndoSnapshot();
+                ImGui::EndTable();
+            }
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
+    }
+
     changed |= colorEdit4u8("##TxFillCol", tx.fillColor, true);
     if (ImGui::IsItemActivated()) canvas.pushUndoSnapshot();
-    itemTooltip("Text Fill Color");
+    itemTooltip("Default Text Fill Color");
     ImGui::SameLine();
     ImGui::TextColored(StudioColors::ToVec4(StudioColors::TextSecondary), "Fill");
     ImGui::SameLine(0.0f, 10.0f);
@@ -703,7 +962,6 @@ void drawTextSubpanel(StudioUiState& state, CanvasEngine& canvas, const ObjMesh&
     ImGui::SameLine();
     ImGui::TextColored(StudioColors::ToVec4(StudioColors::TextSecondary), "Edge");
 
-    ImDrawList* dl = ImGui::GetWindowDrawList();
     float alignX[3] = {0.20f, 0.50f, 0.80f};
     SmallIconKind alignIcons[3] = {SmallIconKind::AlignLeft, SmallIconKind::AlignCenterH, SmallIconKind::AlignRight};
     const char* alignTips[3] = {"Nudge Left / Align Left", "Center on Vehicle / UV Center", "Nudge Right / Align Right"};
@@ -1264,7 +1522,7 @@ void drawShortcutsHelpModal(StudioUiState& state, const StudioCallbacks& callbac
             {"V / A",           "Selection Tool / Direct Selection"},
             {"B / E / G / I",   "Brush / Eraser / Bucket / Eyedropper"},
             {"P / \\ / M",      "Pen Tool / Line Tool / Rectangle Tool"},
-            {"T / D",           "Type Tool / Import Image"},
+            {"T / Shift+T / D", "Type / Touch Type Tool / Import Image"},
             {"H / Z / O",       "Hand Tool / Zoom Tool / Orbit 3D"},
             {"Shift + M",       "Toggle Mirror Symmetry"},
             {"1 / 3 / 7 / 5",   "Front / Side / Top / Persp-Ortho"},
@@ -1412,9 +1670,9 @@ void drawTopWorkspaceBar(StudioUiState& state, UvViewportState& uvState,
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(7.0f, 4.0f));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3.0f, 2.0f));
 
-        // --- ROW 1: Unified Caption-Embedded Chrome ([Cr] Squircle + House + 7 Menus + Doc + Workspace/Actions + _ [] X) ---
-        ImVec2 logoMin(x + 8.0f, y + 3.0f);
-        ImVec2 logoMax(logoMin.x + 26.0f, logoMin.y + 26.0f);
+        // --- ROW 1: Unified Caption-Embedded Chrome ([Cr] 20x20 Squircle + 20x20 House + Menus + Actions + _ [] X) ---
+        ImVec2 logoMin(x + 8.0f, y + 6.0f);
+        ImVec2 logoMax(logoMin.x + 20.0f, logoMin.y + 20.0f);
         if (state.appLogoTex != 0) {
             dl->AddImage(state.appLogoTex, logoMin, logoMax);
         } else {
@@ -1422,18 +1680,18 @@ void drawTopWorkspaceBar(StudioUiState& state, UvViewportState& uvState,
         }
 
         // Illustrator-style House (Home Screen toggle) icon button beside [Cr]
-        ImVec2 hmMin(logoMax.x + 6.0f, y + 4.0f);
-        ImVec2 hmMax(hmMin.x + 24.0f, hmMin.y + 24.0f);
+        ImVec2 hmMin(logoMax.x + 5.0f, y + 6.0f);
+        ImVec2 hmMax(hmMin.x + 20.0f, hmMin.y + 20.0f);
         ImGui::SetCursorScreenPos(hmMin);
-        bool hmClick = ImGui::InvisibleButton("##top_home_btn", ImVec2(24.0f, 24.0f));
+        bool hmClick = ImGui::InvisibleButton("##top_home_btn", ImVec2(20.0f, 20.0f));
         bool hmHov = ImGui::IsItemHovered();
         if (hmHov) state.headerItemHovered = true;
         if (state.showHomeScreen || hmHov) {
             dl->AddRectFilled(hmMin, hmMax,
                               state.showHomeScreen ? StudioColors::ControlHover : StudioColors::ControlBg,
-                              4.0f);
+                              3.0f);
         }
-        drawSmallIcon(dl, SmallIconKind::Home, hmMin + ImVec2(4.0f, 4.0f), hmMax - ImVec2(4.0f, 4.0f),
+        drawSmallIcon(dl, SmallIconKind::Home, hmMin + ImVec2(3.0f, 3.0f), hmMax - ImVec2(3.0f, 3.0f),
                       state.showHomeScreen ? StudioColors::TextPrimary : StudioColors::TextSecondary);
         if (hmHov) {
             ImGui::SetTooltip("%s", state.showHomeScreen ? (state.hasActiveDocument ? "Return to Editor" : "Home")
@@ -1577,10 +1835,14 @@ void drawTopWorkspaceBar(StudioUiState& state, UvViewportState& uvState,
                 tp.text = "Lorem ipsum";
                 tp.uvPos = Vec2{0.5f, 0.5f};
                 tp.anchoredIn3D = false;
+                tp.fontFamily = "Arial";
+                tp.fontStyle = "Bold";
+                tp.fontPath = canvas.findFontPath("", tp.fontFamily, tp.fontStyle);
                 tp.fillColor = state.brush.color;
                 tp.outlineColor = state.secondaryColor;
                 tp.mirrorX = state.brush.mirrorX;
                 tp.mirrorMode = state.brush.mirrorX ? MirrorTextMode::ReadableBothSides : MirrorTextMode::None;
+                tp.syncCharStyles();
                 int itemIdx = canvas.addTextItem("Text Layer", tp, &mesh);
                 canvas.selectedItemIdx = itemIdx;
                 if (VectorItem* created = canvas.activeVectorItem()) {
@@ -1588,8 +1850,14 @@ void drawTopWorkspaceBar(StudioUiState& state, UvViewportState& uvState,
                     state.textEditSyncedLayerId = created->id;
                 }
                 state.activeTool = StudioTool::Text;
+                state.activeTypeToolVariant = 0;
                 state.activePropsCat = PropertiesCategory::Text;
                 if (callbacks.onCanvasModified) callbacks.onCanvasModified();
+            }
+            if (ImGui::MenuItem("Touch Type Tool", "Shift+T", state.activeTool == StudioTool::TouchType)) {
+                state.activeTool = StudioTool::TouchType;
+                state.activeTypeToolVariant = 1;
+                state.activePropsCat = PropertiesCategory::Text;
             }
             if (ImGui::MenuItem("Fill with Placeholder Text")) {
                 triggerFillPlaceholderText(state, canvas, mesh, callbacks);
@@ -1904,7 +2172,7 @@ void drawTopWorkspaceBar(StudioUiState& state, UvViewportState& uvState,
                       : nullptr;
         VectorItem* actItem = canvas.activeVectorItem();
 
-        const bool showTextBar = (state.activeTool == StudioTool::Text) ||
+        const bool showTextBar = (state.activeTool == StudioTool::Text || state.activeTool == StudioTool::TouchType) ||
                                  (state.activeTool == StudioTool::Select &&
                                   ((actItem && actItem->kind == VectorItemKind::Text) ||
                                    (!actItem && actL && actL->kind == LayerKind::Text)));
@@ -1922,51 +2190,50 @@ void drawTopWorkspaceBar(StudioUiState& state, UvViewportState& uvState,
             uint32_t tUid = (actItem && actItem->kind == VectorItemKind::Text) ? actItem->id : (actL ? actL->id : 0);
             if (pTx && actL && !actL->locked) {
                 TextLayerProps& tx = *pTx;
+                tx.syncCharStyles();
                 if (state.textEditSyncedLayerId != tUid) {
                     std::snprintf(state.textEditBuf, sizeof(state.textEditBuf), "%s", tx.text.c_str());
                     state.textEditSyncedLayerId = tUid;
                 }
                 bool ch = false;
-                ImGui::SetNextItemWidth(132.0f);
+                ImGui::SetNextItemWidth(118.0f);
                 if (ImGui::InputText("##CtxTxtBuf", state.textEditBuf, sizeof(state.textEditBuf))) {
                     tx.text = state.textEditBuf;
+                    tx.syncCharStyles();
                     ch = true;
                 }
                 if (ImGui::IsItemActivated()) canvas.pushUndoSnapshot();
                 itemTooltip("Edit Active Text String");
                 ImGui::SameLine();
-                if (canvas.fonts().empty()) canvas.scanSystemFonts();
-                std::string curF = tx.fontPath.empty()
-                                   ? "Arial Bold"
-                                   : std::filesystem::path(tx.fontPath).stem().string();
-                ImGui::SetNextItemWidth(96.0f);
-                if (ImGui::BeginCombo("##CtxFont", curF.c_str())) {
-                    for (const FontFaceInfo& ff : canvas.fonts()) {
-                        bool isSel = (tx.fontPath == ff.filePath);
-                        if (ImGui::Selectable(ff.displayName.c_str(), isSel)) {
-                            canvas.pushUndoSnapshot();
-                            tx.fontPath = ff.filePath;
-                            ch = true;
-                        }
-                    }
-                    ImGui::EndCombo();
-                }
-                itemTooltip("Font Family");
+                ch |= drawGroupedFontPickers(state, canvas, tx, 108.0f, 82.0f, true, "CtxF");
                 ImGui::SameLine();
-                ImGui::SetNextItemWidth(64.0f);
-                ch |= ImGui::DragFloat("##CtxSz", &tx.fontSizePx, 1.0f, 12.0f, 512.0f, "%.0f px");
+                ImGui::SetNextItemWidth(58.0f);
+                ch |= ImGui::DragFloat("##CtxSz", &tx.fontSizePx, 1.0f, 8.0f, 512.0f, "%.0f px");
                 if (ImGui::IsItemActivated()) canvas.pushUndoSnapshot();
                 itemTooltip("Font Size (px)");
                 ImGui::SameLine();
-                ImGui::SetNextItemWidth(58.0f);
-                ch |= ImGui::DragFloat("##CtxOut", &tx.outlineWidth, 0.2f, 0.0f, 24.0f, "%.1f out");
-                if (ImGui::IsItemActivated()) canvas.pushUndoSnapshot();
-                itemTooltip("Stroke Outline Width");
-                ImGui::SameLine();
-                if (ImGui::Button("Lorem")) {
-                    triggerFillPlaceholderText(state, canvas, mesh, callbacks);
+                if (flatTogglePill("Box", tx.isAreaBox)) {
+                    canvas.pushUndoSnapshot();
+                    tx.isAreaBox = !tx.isAreaBox;
+                    ch = true;
                 }
-                itemTooltip("Fill with Placeholder Text (Lorem ipsum)");
+                itemTooltip("Toggle Wrappable Area Type Box");
+                ImGui::SameLine();
+                if (flatTogglePill("Touch", state.activeTool == StudioTool::TouchType)) {
+                    state.activeTool = StudioTool::TouchType;
+                    state.activeTypeToolVariant = 1;
+                }
+                itemTooltip("Touch Type Tool (Shift+T)");
+                if (tx.selectedCharIdx >= 0 && tx.selectedCharIdx < static_cast<int>(tx.text.size())) {
+                    ImGui::SameLine();
+                    char chLbl[24];
+                    char cc = tx.text[tx.selectedCharIdx];
+                    std::snprintf(chLbl, sizeof(chLbl), "#%d '%c' x", tx.selectedCharIdx + 1, cc == ' ' ? '_' : cc);
+                    if (flatTogglePill(chLbl, true, true)) {
+                        tx.selectedCharIdx = -1;
+                    }
+                    itemTooltip("Click to Clear Single-Letter Selection");
+                }
                 if (ch) {
                     canvas.rasterizeLayer(canvas.activeLayerIdx, &mesh);
                     if (callbacks.onCanvasModified) callbacks.onCanvasModified();
@@ -2147,13 +2414,15 @@ void drawToolRail(StudioUiState& state, const StudioCallbacks& callbacks,
         state.brush.eraser = (tool == StudioTool::Eraser);
         if (tool == StudioTool::Pen) state.activePenToolVariant = 0;
         else if (tool == StudioTool::Line) state.activePenToolVariant = 1;
+        else if (tool == StudioTool::Text) state.activeTypeToolVariant = 0;
+        else if (tool == StudioTool::TouchType) state.activeTypeToolVariant = 1;
         else if (tool == StudioTool::Hand) state.activeNavToolVariant = 0;
         else if (tool == StudioTool::Zoom) state.activeNavToolVariant = 1;
 
         if (tool == StudioTool::VertexEdit || tool == StudioTool::FacePaintMask) {
             state.activeMode = StudioMode::EditMesh;
             state.activePropsCat = PropertiesCategory::MeshEdit;
-        } else if (tool == StudioTool::Text) {
+        } else if (tool == StudioTool::Text || tool == StudioTool::TouchType) {
             state.activeMode = StudioMode::TexturePaint;
             state.activePropsCat = PropertiesCategory::Text;
         } else if (tool == StudioTool::Image) {
@@ -2184,6 +2453,7 @@ void drawToolRail(StudioUiState& state, const StudioCallbacks& callbacks,
             int groupKind; // 0=none, 1=Pen/Line, 2=Hand/Zoom, 3=Vertex/Mask
         };
         const StudioTool penCur = (state.activePenToolVariant == 1) ? StudioTool::Line : StudioTool::Pen;
+        const StudioTool typeCur = (state.activeTypeToolVariant == 1) ? StudioTool::TouchType : StudioTool::Text;
         const StudioTool navCur = (state.activeNavToolVariant == 1) ? StudioTool::Zoom : StudioTool::Hand;
         const StudioTool edit3DCur = (state.activeTool == StudioTool::FacePaintMask)
                                      ? StudioTool::FacePaintMask : StudioTool::VertexEdit;
@@ -2192,7 +2462,7 @@ void drawToolRail(StudioUiState& state, const StudioCallbacks& callbacks,
             {StudioTool::DirectSelect, StudioTool::DirectSelect,  false, false, 0},
             {penCur,                   StudioTool::Line,          true,  false, 1},
             {StudioTool::Rect,         StudioTool::Rect,          false, false, 0},
-            {StudioTool::Text,         StudioTool::Text,          false, false, 0},
+            {typeCur,                  StudioTool::TouchType,     true,  false, 4},
             {StudioTool::Brush,        StudioTool::Brush,         false, true,  0},
             {StudioTool::Eraser,       StudioTool::Eraser,        false, false, 0},
             {StudioTool::Fill,         StudioTool::Fill,          false, false, 0},
@@ -2225,6 +2495,7 @@ void drawToolRail(StudioUiState& state, const StudioCallbacks& callbacks,
             bool hovered = ImGui::IsItemHovered();
             bool isActive = (state.activeTool == tool) ||
                             (sl.groupKind == 1 && (state.activeTool == StudioTool::Pen || state.activeTool == StudioTool::Line)) ||
+                            (sl.groupKind == 4 && (state.activeTool == StudioTool::Text || state.activeTool == StudioTool::TouchType)) ||
                             (sl.groupKind == 2 && (state.activeTool == StudioTool::Hand || state.activeTool == StudioTool::Zoom)) ||
                             (sl.groupKind == 3 && (state.activeTool == StudioTool::VertexEdit || state.activeTool == StudioTool::FacePaintMask));
             bool is3DEditTool = (tool == StudioTool::VertexEdit || tool == StudioTool::FacePaintMask);
@@ -2272,6 +2543,9 @@ void drawToolRail(StudioUiState& state, const StudioCallbacks& callbacks,
                     if (sl.groupKind == 1) {
                         if (ImGui::MenuItem("Pen Tool", "P", state.activeTool == StudioTool::Pen)) activateTool(StudioTool::Pen);
                         if (ImGui::MenuItem("Line Tool", "\\", state.activeTool == StudioTool::Line)) activateTool(StudioTool::Line);
+                    } else if (sl.groupKind == 4) {
+                        if (ImGui::MenuItem("Type Tool", "T", state.activeTool == StudioTool::Text)) activateTool(StudioTool::Text);
+                        if (ImGui::MenuItem("Touch Type Tool", "Shift+T", state.activeTool == StudioTool::TouchType)) activateTool(StudioTool::TouchType);
                     } else if (sl.groupKind == 2) {
                         if (ImGui::MenuItem("Hand Tool", "H", state.activeTool == StudioTool::Hand)) activateTool(StudioTool::Hand);
                         if (ImGui::MenuItem("Zoom Tool", "Z", state.activeTool == StudioTool::Zoom)) activateTool(StudioTool::Zoom);
@@ -3172,7 +3446,7 @@ void drawInspectorPanel(StudioUiState& state, CanvasEngine& canvas,
                 drawRectSubpanel(state, canvas, mesh, callbacks);
             }
             if (ImGui::CollapsingHeader("Typography", sectionFlags(PropertiesCategory::Text,
-                state.activeTool == StudioTool::Text ||
+                state.activeTool == StudioTool::Text || state.activeTool == StudioTool::TouchType ||
                 (actItem && actItem->kind == VectorItemKind::Text) ||
                 (!actItem && actL && actL->kind == LayerKind::Text)))) {
                 drawTextSubpanel(state, canvas, mesh, callbacks);
@@ -3244,7 +3518,7 @@ void drawStatusBar(const StudioUiState& state, const CanvasEngine& canvas,
 void drawHomeScreen(StudioUiState& state, CanvasEngine& canvas, const StudioCallbacks& callbacks,
                     float x, float y, float width, float height) {
     (void)canvas;
-    const float navW = std::min(205.0f, width * 0.24f);
+    const float navW = std::min(172.0f, width * 0.21f);
     const ImU32 homeLeftBg = IM_COL32(0x1E, 0x1E, 0x1E, 255);
     const ImU32 homeMainBg = IM_COL32(0x26, 0x26, 0x26, 255);
     const ImU32 cardBg     = IM_COL32(0x2E, 0x2E, 0x2E, 255);
@@ -3257,8 +3531,9 @@ void drawHomeScreen(StudioUiState& state, CanvasEngine& canvas, const StudioCall
         if (callbacks.onStartPreset) {
             callbacks.onStartPreset(idx);
         } else {
-            if (idx == 0 && callbacks.onQuickLoadPorsche) callbacks.onQuickLoadPorsche();
-            else if (idx == 4 && callbacks.onOpenObj) callbacks.onOpenObj();
+            if (idx == 0 && callbacks.onLoadProject) callbacks.onLoadProject();
+            else if (idx == 1 && callbacks.onOpenObj) callbacks.onOpenObj();
+            else if (idx == 2 && callbacks.onOpenLiveryPng) callbacks.onOpenLiveryPng();
             else if (callbacks.onNewProject) callbacks.onNewProject();
             state.showHomeScreen = false;
         }
@@ -3277,72 +3552,72 @@ void drawHomeScreen(StudioUiState& state, CanvasEngine& canvas, const StudioCall
     if (ImGui::Begin("##CoatroomHomeScreen", nullptr, flags)) {
         ImDrawList* dl = ImGui::GetWindowDrawList();
 
-        // 1. Left Navigation Rail (#1E1E1E)
+        // 1. Compact Left Navigation Rail (#1E1E1E)
         dl->AddRectFilled(ImVec2(x, y), ImVec2(x + navW, y + height), homeLeftBg);
         dl->AddLine(ImVec2(x + navW, y), ImVec2(x + navW, y + height), StudioColors::Border, 1.0f);
 
-        float pillW = std::max(96.0f, navW - 38.0f);
-        ImVec2 newMin(x + 19.0f, y + 20.0f);
+        float pillW = std::min(120.0f, std::max(84.0f, navW - 36.0f));
+        ImVec2 newMin(x + std::floor((navW - pillW) * 0.5f), y + 18.0f);
         ImGui::SetCursorScreenPos(newMin);
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 16.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
         ImGui::PushStyleColor(ImGuiCol_Button, StudioColors::ToVec4(adobeBlue));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, StudioColors::ToVec4(adobeBlueH));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, StudioColors::ToVec4(adobeBlueA));
         ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 255, 255, 255));
-        if (ImGui::Button("New project", ImVec2(pillW, 32.0f))) {
-            invokePreset(2);
+        if (ImGui::Button("New project", ImVec2(pillW, 24.0f))) {
+            invokePreset(3);
         }
         ImGui::PopStyleColor(4);
 
-        ImGui::SetCursorScreenPos(ImVec2(newMin.x, newMin.y + 40.0f));
+        ImGui::SetCursorScreenPos(ImVec2(newMin.x, newMin.y + 30.0f));
         ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, StudioColors::ToVec4(StudioColors::ControlHover));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, StudioColors::ToVec4(StudioColors::ControlActive));
         ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(0x4A, 0x4A, 0x4A, 255));
-        if (ImGui::Button("Open...", ImVec2(pillW, 30.0f))) {
+        if (ImGui::Button("Open...", ImVec2(pillW, 24.0f))) {
             if (callbacks.onLoadProject) callbacks.onLoadProject();
             else if (callbacks.onOpenObj) callbacks.onOpenObj();
         }
         ImGui::PopStyleColor(4);
         ImGui::PopStyleVar(3);
 
-        float divY = newMin.y + 88.0f;
-        dl->AddLine(ImVec2(x + 16.0f, divY), ImVec2(x + navW - 16.0f, divY), IM_COL32(0x33, 0x33, 0x33, 255), 1.0f);
+        float divY = newMin.y + 66.0f;
+        dl->AddLine(ImVec2(x + 14.0f, divY), ImVec2(x + navW - 14.0f, divY), IM_COL32(0x33, 0x33, 0x33, 255), 1.0f);
 
         struct NavItem { const char* lbl; SmallIconKind icon; int tabId; };
         static constexpr NavItem kNavs[] = {
             {"Home",      SmallIconKind::Home,      0},
             {"Templates", SmallIconKind::Templates, 1},
         };
-        float navY = divY + 14.0f;
+        float navY = divY + 10.0f;
         for (int ni = 0; ni < 2; ++ni) {
             bool act = (state.homeNavTab == kNavs[ni].tabId);
-            ImVec2 rMin(x, navY + ni * 38.0f);
-            ImVec2 rMax(x + navW - 1.0f, rMin.y + 34.0f);
+            ImVec2 rMin(x, navY + ni * 32.0f);
+            ImVec2 rMax(x + navW - 1.0f, rMin.y + 30.0f);
             ImGui::SetCursorScreenPos(rMin);
             ImGui::PushID(ni);
-            bool clk = ImGui::InvisibleButton("##home_nav", ImVec2(navW - 1.0f, 34.0f));
+            bool clk = ImGui::InvisibleButton("##home_nav", ImVec2(navW - 1.0f, 30.0f));
             bool hov = ImGui::IsItemHovered();
             ImGui::PopID();
             if (act) {
                 dl->AddRectFilled(rMin, rMax, IM_COL32(0x2A, 0x2A, 0x2A, 255));
-                dl->AddRectFilled(ImVec2(x, rMin.y + 7.0f), ImVec2(x + 3.0f, rMax.y - 7.0f), IM_COL32(238, 238, 238, 255), 1.5f);
+                dl->AddRectFilled(ImVec2(x, rMin.y + 6.0f), ImVec2(x + 3.0f, rMax.y - 6.0f), IM_COL32(238, 238, 238, 255), 1.5f);
             } else if (hov) {
                 dl->AddRectFilled(rMin, rMax, IM_COL32(0x26, 0x26, 0x26, 255));
             }
-            ImVec2 iMin(x + 22.0f, rMin.y + 8.0f);
+            ImVec2 iMin(x + 18.0f, rMin.y + 7.0f);
             ImU32 fg = (act || hov) ? StudioColors::TextPrimary : StudioColors::TextSecondary;
-            drawSmallIcon(dl, kNavs[ni].icon, iMin, iMin + ImVec2(17.0f, 17.0f), fg);
-            dl->AddText(ImVec2(x + 48.0f, rMin.y + 9.0f), fg, kNavs[ni].lbl);
+            drawSmallIcon(dl, kNavs[ni].icon, iMin, iMin + ImVec2(16.0f, 16.0f), fg);
+            dl->AddText(ImVec2(x + 42.0f, rMin.y + 8.0f), fg, kNavs[ni].lbl);
             if (clk) state.homeNavTab = kNavs[ni].tabId;
         }
 
         if (state.hasActiveDocument) {
-            ImVec2 bkPos(x + 19.0f, y + height - 48.0f);
+            ImVec2 bkPos(newMin.x, y + height - 42.0f);
             ImGui::SetCursorScreenPos(bkPos);
-            if (flatTogglePill("Back to Editor", false, false, ImVec2(pillW, 28.0f))) {
+            if (flatTogglePill("Back to Editor", false, false, ImVec2(pillW, 24.0f))) {
                 state.showHomeScreen = false;
                 if (callbacks.onReturnToEditor) callbacks.onReturnToEditor();
             }
@@ -3406,34 +3681,33 @@ void drawHomeScreen(StudioUiState& state, CanvasEngine& canvas, const StudioCall
             ImGui::SetWindowFontScale(1.0f);
             ImGui::Dummy(ImVec2(0.0f, 12.0f));
 
-            // Preset Hero Card ("Start a new livery fast")
+            // Compact Generic Start / Open Card ("Start or Open")
             float heroLocalY = ImGui::GetCursorPosY();
             ImVec2 heroMin(ImGui::GetWindowPos().x + colLeft, ImGui::GetCursorScreenPos().y);
-            const float heroH = 178.0f;
+            const float heroH = 148.0f;
             ImVec2 heroMax(heroMin.x + colW, heroMin.y + heroH);
             mdl->AddRectFilled(heroMin, heroMax, cardBg, 8.0f);
             mdl->AddRect(heroMin, heroMax, cardBorder, 8.0f, 1.0f);
 
-            const char* subHead = "Start a new livery fast";
+            const char* subHead = "Start or Open";
             float subW = ImGui::CalcTextSize(subHead).x;
-            mdl->AddText(ImVec2(heroMin.x + (colW - subW) * 0.5f, heroMin.y + 16.0f),
+            mdl->AddText(ImVec2(heroMin.x + (colW - subW) * 0.5f, heroMin.y + 12.0f),
                          StudioColors::TextPrimary, subHead);
 
             struct PresetSpec { const char* title; const char* spec; int id; };
-            static constexpr PresetSpec kPresets[5] = {
-                {"Porsche 992 GT3 R", "OBJ + 4K UV",     0},
-                {"Safety Car v1.2",   "Example Project", 1},
-                {"4K Blank Livery",   "4096 x 4096 px",  2},
-                {"2K Performance",    "2048 x 2048 px",  3},
-                {"Open Car (.obj)",   "More Presets",    4},
+            static constexpr PresetSpec kPresets[4] = {
+                {"Open Project (.cr)", "Resume saved work",   0},
+                {"Open Car (.obj)",    "Load any 3D mesh",    1},
+                {"Open Livery (.png)", "Load livery texture", 2},
+                {"New 4K Blank",       "4096 x 4096 px",      3},
             };
 
-            float tileW = std::min(144.0f, (colW - 44.0f) / 5.0f);
-            float tileGap = (colW - tileW * 5.0f) / 6.0f;
-            float tileTop = heroMin.y + 44.0f;
-            float tileH = 118.0f;
+            float tileW = std::min(170.0f, (colW - 40.0f) / 4.0f);
+            float tileGap = (colW - tileW * 4.0f) / 5.0f;
+            float tileTop = heroMin.y + 36.0f;
+            float tileH = 98.0f;
 
-            for (int k = 0; k < 5; ++k) {
+            for (int k = 0; k < 4; ++k) {
                 ImVec2 tMin(heroMin.x + tileGap + k * (tileW + tileGap), tileTop);
                 ImVec2 tMax(tMin.x + tileW, tMin.y + tileH);
                 ImGui::SetCursorScreenPos(tMin);
@@ -3447,55 +3721,46 @@ void drawHomeScreen(StudioUiState& state, CanvasEngine& canvas, const StudioCall
                     mdl->AddRect(tMin, tMax, StudioColors::BorderLight, 6.0f, 1.0f);
                 }
 
-                // Centered crisp wireframe preset vector icon
-                ImVec2 ic(tMin.x + tileW * 0.5f, tMin.y + 34.0f);
+                // Centered crisp generic wireframe icon
+                ImVec2 ic(tMin.x + tileW * 0.5f, tMin.y + 28.0f);
                 ImU32 lineCol = tHov ? IM_COL32(240, 240, 242, 255) : IM_COL32(204, 206, 212, 255);
-                if (k == 0 || k == 1) {
-                    // Porsche / GT3 coupe wireframe profile + rear wing
-                    const ImVec2 body[8] = {
-                        {ic.x - 24.0f, ic.y + 8.0f},  {ic.x - 23.0f, ic.y + 1.0f},
-                        {ic.x - 12.0f, ic.y - 2.0f},  {ic.x - 3.0f,  ic.y - 10.0f},
-                        {ic.x + 10.0f, ic.y - 10.0f}, {ic.x + 21.0f, ic.y - 1.0f},
-                        {ic.x + 23.0f, ic.y + 8.0f},  {ic.x - 24.0f, ic.y + 8.0f},
+                if (k == 0) {
+                    // Stacked layers / .cr project file icon
+                    mdl->AddRect(ImVec2(ic.x - 14.0f, ic.y - 16.0f), ImVec2(ic.x + 14.0f, ic.y + 16.0f), lineCol, 2.0f, 1.3f);
+                    mdl->AddLine(ImVec2(ic.x + 6.0f, ic.y - 16.0f), ImVec2(ic.x + 14.0f, ic.y - 8.0f), lineCol, 1.2f);
+                    mdl->AddText(ImVec2(ic.x - 9.0f, ic.y - 3.0f), StudioColors::TextSecondary, ".cr");
+                } else if (k == 1) {
+                    // Generic 3D mesh front-3/4 car silhouette
+                    const ImVec2 meshCar[7] = {
+                        {ic.x - 22.0f, ic.y + 7.0f}, {ic.x - 19.0f, ic.y - 1.0f},
+                        {ic.x - 8.0f,  ic.y - 9.0f}, {ic.x + 10.0f, ic.y - 9.0f},
+                        {ic.x + 21.0f, ic.y + 0.0f}, {ic.x + 22.0f, ic.y + 7.0f},
+                        {ic.x - 22.0f, ic.y + 7.0f},
                     };
-                    mdl->AddPolyline(body, 8, lineCol, 1.35f, ImDrawFlags_None);
-                    mdl->AddCircleFilled(ImVec2(ic.x - 13.5f, ic.y + 9.0f), 4.2f, cardBg, 14);
-                    mdl->AddCircle(ImVec2(ic.x - 13.5f, ic.y + 9.0f), 4.2f, lineCol, 14, 1.3f);
-                    mdl->AddCircleFilled(ImVec2(ic.x + 13.5f, ic.y + 9.0f), 4.2f, cardBg, 14);
-                    mdl->AddCircle(ImVec2(ic.x + 13.5f, ic.y + 9.0f), 4.2f, lineCol, 14, 1.3f);
-                    // Rear GT3 wing
-                    mdl->AddLine(ImVec2(ic.x + 18.0f, ic.y - 4.0f), ImVec2(ic.x + 23.0f, ic.y - 12.0f), lineCol, 1.2f);
-                    mdl->AddLine(ImVec2(ic.x + 19.0f, ic.y - 12.0f), ImVec2(ic.x + 27.0f, ic.y - 12.0f), lineCol, 1.5f);
-                    if (k == 1) {
-                        // Safety Car roof beacon accent + stripe
-                        mdl->AddRectFilled(ImVec2(ic.x + 0.0f, ic.y - 13.5f), ImVec2(ic.x + 7.5f, ic.y - 10.5f),
-                                           StudioColors::AmberAccent, 1.0f);
-                        mdl->AddLine(ImVec2(ic.x - 16.0f, ic.y + 2.0f), ImVec2(ic.x + 17.0f, ic.y + 2.0f),
-                                     IM_COL32(0x2F, 0xE6, 0xCE, 220), 1.3f);
-                    }
+                    mdl->AddPolyline(meshCar, 7, lineCol, 1.35f, ImDrawFlags_None);
+                    mdl->AddCircleFilled(ImVec2(ic.x - 12.0f, ic.y + 8.0f), 4.0f, cardBg, 12);
+                    mdl->AddCircle(ImVec2(ic.x - 12.0f, ic.y + 8.0f), 4.0f, lineCol, 12, 1.25f);
+                    mdl->AddCircleFilled(ImVec2(ic.x + 12.0f, ic.y + 8.0f), 4.0f, cardBg, 12);
+                    mdl->AddCircle(ImVec2(ic.x + 12.0f, ic.y + 8.0f), 4.0f, lineCol, 12, 1.25f);
                 } else if (k == 2) {
-                    // 4K Page outline with corner fold
-                    mdl->AddRect(ImVec2(ic.x - 16.0f, ic.y - 18.0f), ImVec2(ic.x + 16.0f, ic.y + 18.0f), lineCol, 1.5f, 1.3f);
-                    mdl->AddLine(ImVec2(ic.x + 7.0f, ic.y - 18.0f), ImVec2(ic.x + 16.0f, ic.y - 9.0f), lineCol, 1.2f);
-                    mdl->AddText(ImVec2(ic.x - 7.5f, ic.y - 4.0f), StudioColors::TextSecondary, "4K");
-                } else if (k == 3) {
-                    // 2K Wide Artboard outline
-                    mdl->AddRect(ImVec2(ic.x - 21.0f, ic.y - 14.0f), ImVec2(ic.x + 21.0f, ic.y + 14.0f), lineCol, 1.5f, 1.3f);
-                    mdl->AddLine(ImVec2(ic.x - 21.0f, ic.y - 7.0f), ImVec2(ic.x + 21.0f, ic.y - 7.0f), StudioColors::TextMuted, 1.0f);
-                    mdl->AddText(ImVec2(ic.x - 7.5f, ic.y - 3.0f), StudioColors::TextSecondary, "2K");
+                    // Livery PNG frame icon
+                    mdl->AddRect(ImVec2(ic.x - 18.0f, ic.y - 13.0f), ImVec2(ic.x + 18.0f, ic.y + 13.0f), lineCol, 2.0f, 1.3f);
+                    const ImVec2 mt[4] = {
+                        {ic.x - 14.0f, ic.y + 9.0f}, {ic.x - 4.0f, ic.y - 1.0f},
+                        {ic.x + 4.0f,  ic.y + 5.0f}, {ic.x + 14.0f, ic.y - 4.0f},
+                    };
+                    mdl->AddPolyline(mt, 4, StudioColors::TextSecondary, 1.2f, ImDrawFlags_None);
                 } else {
-                    // Open / More Presets (...) circle
-                    mdl->AddCircle(ic, 16.0f, lineCol, 24, 1.3f);
-                    mdl->AddCircleFilled(ImVec2(ic.x - 6.0f, ic.y), 1.7f, lineCol, 8);
-                    mdl->AddCircleFilled(ImVec2(ic.x, ic.y), 1.7f, lineCol, 8);
-                    mdl->AddCircleFilled(ImVec2(ic.x + 6.0f, ic.y), 1.7f, lineCol, 8);
+                    // New 4K blank canvas outline
+                    mdl->AddRect(ImVec2(ic.x - 15.0f, ic.y - 15.0f), ImVec2(ic.x + 15.0f, ic.y + 15.0f), lineCol, 2.0f, 1.3f);
+                    mdl->AddText(ImVec2(ic.x - 7.0f, ic.y - 6.0f), StudioColors::TextSecondary, "4K");
                 }
 
                 float tw = ImGui::CalcTextSize(kPresets[k].title).x;
-                mdl->AddText(ImVec2(tMin.x + (tileW - tw) * 0.5f, tMin.y + 68.0f),
+                mdl->AddText(ImVec2(tMin.x + (tileW - tw) * 0.5f, tMin.y + 54.0f),
                              StudioColors::TextPrimary, kPresets[k].title);
                 float sw = ImGui::CalcTextSize(kPresets[k].spec).x;
-                mdl->AddText(ImVec2(tMin.x + (tileW - sw) * 0.5f, tMin.y + 87.0f),
+                mdl->AddText(ImVec2(tMin.x + (tileW - sw) * 0.5f, tMin.y + 72.0f),
                              StudioColors::TextMuted, kPresets[k].spec);
 
                 if (tClick) {
@@ -3589,10 +3854,10 @@ void drawHomeScreen(StudioUiState& state, CanvasEngine& canvas, const StudioCall
                                      StudioColors::TextMuted, emptyMsg);
                         ImGui::Dummy(ImVec2(colW, 84.0f));
                     } else if (state.homeGridView) {
-                        const int cols = std::max(2, static_cast<int>((colW + 12.0f) / 178.0f));
+                        const int cols = std::max(2, static_cast<int>((colW + 12.0f) / 208.0f));
                         const float gap = 12.0f;
-                        const float cW = (colW - gap * (cols - 1)) / cols;
-                        const float cH = 142.0f;
+                        const float cW = std::min(220.0f, (colW - gap * (cols - 1)) / cols);
+                        const float cH = 152.0f;
                         for (size_t k = 0; k < indices.size(); ++k) {
                             const RecentProjectEntry& e = state.recentProjects[indices[k]];
                             int col = static_cast<int>(k) % cols;
@@ -3609,29 +3874,40 @@ void drawHomeScreen(StudioUiState& state, CanvasEngine& canvas, const StudioCall
                             rdl->AddRect(cMin, cMax, hov ? StudioColors::BorderLight : cardBorder, 6.0f, 1.0f);
 
                             ImVec2 thMin(cMin.x + 4.0f, cMin.y + 4.0f);
-                            ImVec2 thMax(cMax.x - 4.0f, cMin.y + 92.0f);
+                            ImVec2 thMax(cMax.x - 4.0f, cMin.y + 108.0f);
                             rdl->AddRectFilled(thMin, thMax, IM_COL32(0x1B, 0x1B, 0x1B, 255), 4.0f);
                             if (e.thumbTex != 0) {
-                                rdl->AddImage(e.thumbTex, thMin, thMax);
+                                rdl->AddImageRounded(e.thumbTex, thMin, thMax, ImVec2(0, 0), ImVec2(1, 1),
+                                                     IM_COL32_WHITE, 4.0f);
                             } else {
-                                // Subtle geometric wireframe car icon inside thumbnail
-                                ImVec2 tc((thMin.x + thMax.x) * 0.5f, (thMin.y + thMax.y) * 0.5f);
-                                rdl->AddRect(tc - ImVec2(24.0f, 12.0f), tc + ImVec2(24.0f, 12.0f),
-                                             IM_COL32(72, 76, 84, 180), 3.0f, 1.0f);
-                                rdl->AddText(ImVec2(tc.x - 8.0f, tc.y - 6.0f), StudioColors::TextMuted,
-                                             e.kind.empty() ? "CR" : e.kind.c_str());
+                                // Front 3/4th perspective wireframe car preview when thumbnail is absent
+                                ImVec2 tc((thMin.x + thMax.x) * 0.5f, (thMin.y + thMax.y) * 0.5f + 4.0f);
+                                ImU32 wf = IM_COL32(105, 112, 126, 195);
+                                const ImVec2 wfBody[8] = {
+                                    {tc.x - 36.0f, tc.y + 10.0f}, {tc.x - 34.0f, tc.y - 2.0f},
+                                    {tc.x - 20.0f, tc.y - 6.0f},  {tc.x - 6.0f,  tc.y - 16.0f},
+                                    {tc.x + 18.0f, tc.y - 16.0f}, {tc.x + 33.0f, tc.y - 4.0f},
+                                    {tc.x + 35.0f, tc.y + 8.0f},  {tc.x - 36.0f, tc.y + 10.0f},
+                                };
+                                rdl->AddPolyline(wfBody, 8, wf, 1.25f, ImDrawFlags_None);
+                                rdl->AddLine(ImVec2(tc.x - 20.0f, tc.y - 6.0f), ImVec2(tc.x + 4.0f, tc.y - 5.0f), wf, 1.0f);
+                                rdl->AddLine(ImVec2(tc.x - 6.0f, tc.y - 16.0f), ImVec2(tc.x + 4.0f, tc.y - 5.0f), wf, 1.0f);
+                                rdl->AddCircleFilled(ImVec2(tc.x - 22.0f, tc.y + 11.0f), 5.5f, IM_COL32(0x1B, 0x1B, 0x1B, 255), 14);
+                                rdl->AddCircle(ImVec2(tc.x - 22.0f, tc.y + 11.0f), 5.5f, wf, 14, 1.25f);
+                                rdl->AddCircleFilled(ImVec2(tc.x + 18.0f, tc.y + 9.0f), 5.0f, IM_COL32(0x1B, 0x1B, 0x1B, 255), 14);
+                                rdl->AddCircle(ImVec2(tc.x + 18.0f, tc.y + 9.0f), 5.0f, wf, 14, 1.25f);
                             }
                             if (!e.kind.empty()) {
                                 ImVec2 bMin(thMax.x - 32.0f, thMin.y + 4.0f);
                                 ImVec2 bMax(thMax.x - 4.0f, thMin.y + 20.0f);
-                                rdl->AddRectFilled(bMin, bMax, IM_COL32(0x28, 0x2A, 0x30, 235), 3.0f);
+                                rdl->AddRectFilled(bMin, bMax, IM_COL32(0x22, 0x24, 0x29, 235), 3.0f);
                                 rdl->AddText(ImVec2(bMin.x + 5.0f, bMin.y + 1.0f), StudioColors::StudioBlue, e.kind.c_str());
                             }
 
-                            rdl->PushClipRect(ImVec2(cMin.x + 8.0f, cMin.y + 96.0f), ImVec2(cMax.x - 8.0f, cMax.y - 4.0f), true);
-                            rdl->AddText(ImVec2(cMin.x + 8.0f, cMin.y + 98.0f), StudioColors::TextPrimary, e.name.c_str());
+                            rdl->PushClipRect(ImVec2(cMin.x + 8.0f, cMin.y + 111.0f), ImVec2(cMax.x - 8.0f, cMax.y - 4.0f), true);
+                            rdl->AddText(ImVec2(cMin.x + 8.0f, cMin.y + 112.0f), StudioColors::TextPrimary, e.name.c_str());
                             const char* sub = e.detail.empty() ? e.path.c_str() : e.detail.c_str();
-                            rdl->AddText(ImVec2(cMin.x + 8.0f, cMin.y + 117.0f), StudioColors::TextMuted, sub);
+                            rdl->AddText(ImVec2(cMin.x + 8.0f, cMin.y + 130.0f), StudioColors::TextMuted, sub);
                             rdl->PopClipRect();
 
                             if (hov && !e.path.empty()) ImGui::SetTooltip("%s", e.path.c_str());

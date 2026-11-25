@@ -204,6 +204,11 @@ Vec2 snapStepAngleUv(Vec2 anchorUv, Vec2 rawUv, bool shiftHeld, float stepDeg,
 
 Vec2 computeTextHalfUv(const TextLayerProps& tx, int canvasW, int canvasH) {
     float uvScale = static_cast<float>(canvasW) / 2048.0f;
+    if (tx.isAreaBox) {
+        float estW = (std::max(40.0f, tx.boxWidthPx) + tx.outlineWidth * 2.0f + 24.0f) * uvScale;
+        float estH = (std::max(24.0f, tx.boxHeightPx) + tx.outlineWidth * 2.0f + 24.0f) * uvScale;
+        return Vec2{(estW * 0.5f) / canvasW, (estH * 0.5f) / canvasH};
+    }
     float nChars = std::max(1.0f, static_cast<float>(tx.text.size()));
     float estW = (nChars * (tx.fontSizePx * 0.58f + tx.tracking) + tx.outlineWidth * 2.0f + 16.0f) * uvScale;
     float estH = (tx.fontSizePx * 1.18f + tx.outlineWidth * 2.0f + 16.0f) * uvScale;
@@ -1294,8 +1299,10 @@ void drawUvViewport(StudioUiState& state, UvViewportState& uvState,
         }
     }
 
-    // -- TEXT / IMAGE / RECTANGLE / SELECT-MOVE PICKING + NON-SHRINKING 3D<->2D LIVE GIZMO --
+    // -- TEXT / TOUCH TYPE / IMAGE / RECTANGLE / SELECT-MOVE PICKING + AREA BOX & TOUCH TYPE GIZMOS --
+    const bool isTouchTypeTool = (state.activeTool == StudioTool::TouchType);
     const bool isTransformTool = (state.activeTool == StudioTool::Text ||
+                                  isTouchTypeTool ||
                                   state.activeTool == StudioTool::Image ||
                                   state.activeTool == StudioTool::Select);
     static bool s_gizmoStartedAnchored3D = false;
@@ -1320,7 +1327,8 @@ void drawUvViewport(StudioUiState& state, UvViewportState& uvState,
         return false;
     };
 
-    if (isTransformTool && isHovered && toolInputAllowed && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+    if (isTransformTool && !isTouchTypeTool && isHovered && toolInputAllowed &&
+        ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
         uvState.gizmoMode == UvViewportState::GizmoDragMode::None) {
         VectorItem* tItem = nullptr;
         Layer* tLeg = nullptr;
@@ -1330,13 +1338,16 @@ void drawUvViewport(StudioUiState& state, UvViewportState& uvState,
             !(tItem && tItem->locked)) {
             Vec2 centerUv{}, halfUv{};
             float rotDeg = 0.0f;
+            bool isAreaTxt = false;
             if (tItem) {
                 computeItemCenterAndHalf(*tItem, canvas.width, canvas.height, centerUv, halfUv);
                 rotDeg = (tItem->kind == VectorItemKind::Text)      ? tItem->text.rotationDeg :
                          (tItem->kind == VectorItemKind::Image)     ? tItem->image.rotationDeg : tItem->rect.rotationDeg;
+                isAreaTxt = (tItem->kind == VectorItemKind::Text && tItem->text.isAreaBox);
             } else {
                 computeLegacyLayerCenterAndHalf(*tLeg, canvas.width, canvas.height, centerUv, halfUv);
                 rotDeg = (tLeg->kind == LayerKind::Text) ? tLeg->text.rotationDeg : tLeg->decal.rotationDeg;
+                isAreaTxt = (tLeg->kind == LayerKind::Text && tLeg->text.isAreaBox);
             }
             Obb2D curObb = buildScreenObb(centerUv, halfUv, rotDeg, vpCenter, uvState.viewCenterUv, uvState.pixelsPerUv);
             if (length(toVec2(io.MousePos - curObb.rotHandle)) <= 9.0f) {
@@ -1346,6 +1357,13 @@ void drawUvViewport(StudioUiState& state, UvViewportState& uvState,
                     if (length(toVec2(io.MousePos - curObb.corners[ci])) <= 8.5f) {
                         hitCurrentHandle = true;
                         break;
+                    }
+                    if (isAreaTxt) {
+                        ImVec2 edgeMid = (curObb.corners[ci] + curObb.corners[(ci + 1) & 3]) * 0.5f;
+                        if (length(toVec2(io.MousePos - edgeMid)) <= 8.5f) {
+                            hitCurrentHandle = true;
+                            break;
+                        }
                     }
                 }
             }
@@ -1391,13 +1409,16 @@ void drawUvViewport(StudioUiState& state, UvViewportState& uvState,
         float boxW = std::fabs(rMax.x - rMin.x);
         float boxH = std::fabs(rMax.y - rMin.y);
         if (boxW >= 12.0f && boxH >= 12.0f) {
-            dl->AddText(ImVec2(rMin.x + 5.0f, rMin.y + 4.0f), StudioColors::TextPrimary, "Lorem ipsum");
+            dl->AddText(ImVec2(rMin.x + 5.0f, rMin.y + 4.0f), StudioColors::TextPrimary, "Area Type Box");
         }
         if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
             uvState.typeBoxDrawing = false;
             TextLayerProps tp;
             tp.text = "Lorem ipsum";
-            tp.uvPos = (boxW >= 12.0f && boxH >= 12.0f)
+            tp.fontFamily = "Arial";
+            tp.fontStyle = "Bold";
+            tp.fontPath = canvas.findFontPath("", tp.fontFamily, tp.fontStyle);
+            tp.uvPos = (boxW >= 14.0f && boxH >= 12.0f)
                        ? Vec2{(uvState.typeBoxStartUv.x + endUv.x) * 0.5f,
                               (uvState.typeBoxStartUv.y + endUv.y) * 0.5f}
                        : uvState.typeBoxStartUv;
@@ -1406,11 +1427,16 @@ void drawUvViewport(StudioUiState& state, UvViewportState& uvState,
             tp.outlineColor = state.secondaryColor;
             tp.mirrorX = state.brush.mirrorX;
             tp.mirrorMode = state.brush.mirrorX ? MirrorTextMode::ReadableBothSides : MirrorTextMode::None;
-            if (boxW >= 12.0f && boxH >= 12.0f) {
+            float uvScale = std::max(0.25f, static_cast<float>(canvas.width) / 2048.0f);
+            if (boxW >= 20.0f && boxH >= 14.0f) {
+                float pxW = std::fabs(endUv.x - uvState.typeBoxStartUv.x) * canvas.width;
                 float pxH = std::fabs(endUv.y - uvState.typeBoxStartUv.y) * canvas.height;
-                float uvScale = static_cast<float>(canvas.width) / 2048.0f;
-                tp.fontSizePx = std::clamp((pxH * 0.72f) / std::max(0.25f, uvScale), 16.0f, 360.0f);
+                tp.isAreaBox = true;
+                tp.boxWidthPx = std::clamp(pxW / uvScale, 48.0f, 4096.0f);
+                tp.boxHeightPx = std::clamp(pxH / uvScale, 28.0f, 4096.0f);
+                tp.fontSizePx = std::clamp(tp.boxHeightPx * 0.44f, 36.0f, 120.0f);
             }
+            tp.syncCharStyles();
             int itemIdx = canvas.addTextItem("Text Layer", tp, &mesh);
             canvas.selectedItemIdx = itemIdx;
             activeLayer = (canvas.activeLayerIdx >= 0 && canvas.activeLayerIdx < static_cast<int>(canvas.layers.size()))
@@ -1421,7 +1447,161 @@ void drawUvViewport(StudioUiState& state, UvViewportState& uvState,
         }
     }
 
-    if (isTransformTool && !uvState.typeBoxDrawing) {
+    // -- TOUCH TYPE INTERACTIVE PER-LETTER CANVAS HANDLER (Shift+T) --
+    if (isTouchTypeTool) {
+        VectorItem* tItem = nullptr;
+        Layer* tLeg = nullptr;
+        int tLIdx = -1;
+        resolveTransformTarget(tItem, tLeg, tLIdx);
+        TextLayerProps* pTx = (tItem && tItem->kind == VectorItemKind::Text) ? &tItem->text :
+                              (tLeg && tLeg->kind == LayerKind::Text) ? &tLeg->text : nullptr;
+        bool txLocked = (activeLayer && activeLayer->locked) || (tItem && tItem->locked);
+
+        if (isHovered && toolInputAllowed && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+            uvState.gizmoMode == UvViewportState::GizmoDragMode::None) {
+            bool consumed = false;
+            if (pTx && !txLocked && pTx->selectedCharIdx >= 0 &&
+                pTx->selectedCharIdx < static_cast<int>(pTx->lastCharBoxesUv.size())) {
+                const CharBoxUv& selB = pTx->lastCharBoxesUv[pTx->selectedCharIdx];
+                ImVec2 sMin = uvToScreen(selB.uvMin);
+                ImVec2 sMax = uvToScreen(selB.uvMax);
+                ImVec2 sRot((sMin.x + sMax.x) * 0.5f, sMin.y - 16.0f);
+                pTx->syncCharStyles();
+                CharStyle& cs = pTx->charStyles[pTx->selectedCharIdx];
+                if (length(toVec2(io.MousePos - sRot)) <= 8.5f) {
+                    canvas.pushUndoSnapshot();
+                    uvState.gizmoMode = UvViewportState::GizmoDragMode::TouchCharRotate;
+                    uvState.gizmoOrigRotDeg = cs.rotDeg;
+                    consumed = true;
+                } else {
+                    ImVec2 corners[4] = {sMin, {sMax.x, sMin.y}, sMax, {sMin.x, sMax.y}};
+                    for (int ci = 0; ci < 4; ++ci) {
+                        if (length(toVec2(io.MousePos - corners[ci])) <= 8.0f) {
+                            canvas.pushUndoSnapshot();
+                            uvState.gizmoMode = UvViewportState::GizmoDragMode::TouchCharScale;
+                            uvState.gizmoDragStartUv = hoverUv;
+                            uvState.gizmoOrigCharScale = cs.scale;
+                            consumed = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!consumed && pTx) {
+                for (int ci = static_cast<int>(pTx->lastCharBoxesUv.size()) - 1; ci >= 0; --ci) {
+                    const CharBoxUv& b = pTx->lastCharBoxesUv[ci];
+                    if (hoverUv.x >= b.uvMin.x && hoverUv.x <= b.uvMax.x &&
+                        hoverUv.y >= b.uvMin.y && hoverUv.y <= b.uvMax.y) {
+                        pTx->selectedCharIdx = ci;
+                        if (!txLocked) {
+                            pTx->syncCharStyles();
+                            canvas.pushUndoSnapshot();
+                            uvState.gizmoMode = UvViewportState::GizmoDragMode::TouchCharMove;
+                            uvState.gizmoDragStartUv = hoverUv;
+                            uvState.gizmoOrigCharHOffset = pTx->charStyles[ci].hOffsetPx;
+                            uvState.gizmoOrigCharBaseline = pTx->charStyles[ci].baselinePx;
+                        }
+                        consumed = true;
+                        break;
+                    }
+                }
+            }
+            if (!consumed) {
+                int pickedL = -1, pickedI = -1;
+                if (findTopVectorTargetAtPoint(canvas, io.MousePos, vpCenter, uvState.viewCenterUv, uvState.pixelsPerUv,
+                                               pickedL, pickedI)) {
+                    canvas.activeLayerIdx = pickedL;
+                    canvas.selectedItemIdx = pickedI;
+                    state.textEditSyncedLayerId = 0;
+                    resolveTransformTarget(tItem, tLeg, tLIdx);
+                    pTx = (tItem && tItem->kind == VectorItemKind::Text) ? &tItem->text :
+                          (tLeg && tLeg->kind == LayerKind::Text) ? &tLeg->text : nullptr;
+                } else if (pTx) {
+                    pTx->selectedCharIdx = -1;
+                }
+            }
+        }
+
+        if (pTx) {
+            for (int ci = 0; ci < static_cast<int>(pTx->lastCharBoxesUv.size()); ++ci) {
+                const CharBoxUv& b = pTx->lastCharBoxesUv[ci];
+                ImVec2 sMin = uvToScreen(b.uvMin);
+                ImVec2 sMax = uvToScreen(b.uvMax);
+                if (sMax.x - sMin.x < 1.0f || sMax.y - sMin.y < 1.0f) continue;
+                bool isSelChar = (ci == pTx->selectedCharIdx);
+                dl->AddRect(sMin, sMax, isSelChar ? StudioColors::AmberAccent : IM_COL32(0x00, 0xB8, 0xFF, 110),
+                            0.0f, isSelChar ? 1.8f : 1.0f);
+                if (isSelChar) {
+                    ImVec2 corners[4] = {sMin, {sMax.x, sMin.y}, sMax, {sMin.x, sMax.y}};
+                    for (const ImVec2& cp : corners) {
+                        dl->AddRectFilled(cp - ImVec2(3.5f, 3.5f), cp + ImVec2(3.5f, 3.5f), StudioColors::PanelBody);
+                        dl->AddRect(cp - ImVec2(3.5f, 3.5f), cp + ImVec2(3.5f, 3.5f), StudioColors::AmberAccent, 0.0f, 1.3f);
+                    }
+                    ImVec2 topM((sMin.x + sMax.x) * 0.5f, sMin.y);
+                    ImVec2 rotP(topM.x, topM.y - 16.0f);
+                    dl->AddLine(topM, rotP, StudioColors::AmberAccent, 1.3f);
+                    dl->AddCircleFilled(rotP, 4.0f, StudioColors::PanelBody, 12);
+                    dl->AddCircle(rotP, 4.0f, StudioColors::AmberAccent, 12, 1.4f);
+                }
+            }
+
+            if (uvState.gizmoMode == UvViewportState::GizmoDragMode::TouchCharMove ||
+                uvState.gizmoMode == UvViewportState::GizmoDragMode::TouchCharScale ||
+                uvState.gizmoMode == UvViewportState::GizmoDragMode::TouchCharRotate) {
+                pTx->syncCharStyles();
+                int ci = pTx->selectedCharIdx;
+                if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && ci >= 0 &&
+                    ci < static_cast<int>(pTx->charStyles.size())) {
+                    CharStyle& cs = pTx->charStyles[ci];
+                    float uvScale = std::max(0.25f, static_cast<float>(canvas.width) / 2048.0f);
+                    if (uvState.gizmoMode == UvViewportState::GizmoDragMode::TouchCharMove) {
+                        Vec2 dPx = (hoverUv - uvState.gizmoDragStartUv) * static_cast<float>(canvas.width);
+                        cs.hOffsetPx = std::clamp(uvState.gizmoOrigCharHOffset + dPx.x / uvScale, -400.0f, 400.0f);
+                        cs.baselinePx = std::clamp(uvState.gizmoOrigCharBaseline - dPx.y / uvScale, -400.0f, 400.0f);
+                        char cHud[48];
+                        std::snprintf(cHud, sizeof(cHud), "X %.0f  Base %.0f", cs.hOffsetPx, cs.baselinePx);
+                        drawHudBadge(dl, io.MousePos, cHud, StudioColors::AmberAccent);
+                    } else if (uvState.gizmoMode == UvViewportState::GizmoDragMode::TouchCharScale) {
+                        ImVec2 ctr(0.0f, 0.0f);
+                        if (ci < static_cast<int>(pTx->lastCharBoxesUv.size())) {
+                            ctr = (uvToScreen(pTx->lastCharBoxesUv[ci].uvMin) + uvToScreen(pTx->lastCharBoxesUv[ci].uvMax)) * 0.5f;
+                        }
+                        float d0 = std::max(6.0f, length(toVec2(uvToScreen(uvState.gizmoDragStartUv) - ctr)));
+                        float d1 = std::max(3.0f, length(toVec2(io.MousePos - ctr)));
+                        cs.scale = std::clamp(uvState.gizmoOrigCharScale * (d1 / d0), 0.20f, 3.50f);
+                        char cHud[32];
+                        std::snprintf(cHud, sizeof(cHud), "%.0f%%", cs.scale * 100.0f);
+                        drawHudBadge(dl, io.MousePos, cHud, StudioColors::AmberAccent);
+                    } else {
+                        ImVec2 ctr = (ci < static_cast<int>(pTx->lastCharBoxesUv.size()))
+                                     ? (uvToScreen(pTx->lastCharBoxesUv[ci].uvMin) + uvToScreen(pTx->lastCharBoxesUv[ci].uvMax)) * 0.5f
+                                     : io.MousePos;
+                        ImVec2 d = io.MousePos - ctr;
+                        float deg = std::atan2(d.y, d.x) * kRad2Deg + 90.0f;
+                        if (io.KeyShift) deg = std::round(deg / 15.0f) * 15.0f;
+                        while (deg > 180.0f) deg -= 360.0f;
+                        while (deg < -180.0f) deg += 360.0f;
+                        cs.rotDeg = deg;
+                        char cHud[32];
+                        std::snprintf(cHud, sizeof(cHud), "%.0f deg", deg);
+                        drawHudBadge(dl, io.MousePos, cHud, StudioColors::AmberAccent);
+                    }
+                    double now = ImGui::GetTime();
+                    if (now - uvState.lastLiveRasterTime >= 0.015) {
+                        canvas.rasterizeLayer(tLIdx, &mesh);
+                        if (callbacks.onCanvasModified) callbacks.onCanvasModified();
+                        uvState.lastLiveRasterTime = now;
+                    }
+                } else {
+                    canvas.rasterizeLayer(tLIdx, &mesh);
+                    if (callbacks.onCanvasModified) callbacks.onCanvasModified();
+                    uvState.gizmoMode = UvViewportState::GizmoDragMode::None;
+                }
+            }
+        }
+    }
+
+    if (isTransformTool && !isTouchTypeTool && !uvState.typeBoxDrawing) {
         VectorItem* tItem = nullptr;
         Layer* tLeg = nullptr;
         int tLIdx = -1;
@@ -1430,17 +1610,20 @@ void drawUvViewport(StudioUiState& state, UvViewportState& uvState,
             Vec2 centerUv{}, halfUv{};
             float rotDeg = 0.0f;
             bool isText = false, isImage = false, isRect = false;
+            bool isAreaTxt = false;
             bool isMirrored = false;
             if (tItem) {
                 isText = (tItem->kind == VectorItemKind::Text);
                 isImage = (tItem->kind == VectorItemKind::Image);
                 isRect = (tItem->kind == VectorItemKind::RectShape);
+                isAreaTxt = (isText && tItem->text.isAreaBox);
                 computeItemCenterAndHalf(*tItem, canvas.width, canvas.height, centerUv, halfUv);
                 rotDeg = isText ? tItem->text.rotationDeg : isImage ? tItem->image.rotationDeg : tItem->rect.rotationDeg;
                 isMirrored = isText ? tItem->text.mirrorX : isImage ? tItem->image.mirrorX : tItem->rect.mirrorX;
             } else {
                 isText = (tLeg->kind == LayerKind::Text);
                 isImage = !isText;
+                isAreaTxt = (isText && tLeg->text.isAreaBox);
                 computeLegacyLayerCenterAndHalf(*tLeg, canvas.width, canvas.height, centerUv, halfUv);
                 rotDeg = isText ? tLeg->text.rotationDeg : tLeg->decal.rotationDeg;
                 isMirrored = isText ? (tLeg->text.mirrorX || tLeg->text.mirrorMode != MirrorTextMode::None)
@@ -1460,6 +1643,11 @@ void drawUvViewport(StudioUiState& state, UvViewportState& uvState,
                                   StudioColors::PanelBody);
                 dl->AddRect(obb.corners[ci] - ImVec2(4.0f, 4.0f), obb.corners[ci] + ImVec2(4.0f, 4.0f),
                             StudioColors::GuideCyan, 0.0f, 1.4f);
+                if (isAreaTxt) {
+                    ImVec2 edgeMid = (obb.corners[ci] + obb.corners[(ci + 1) & 3]) * 0.5f;
+                    dl->AddRectFilled(edgeMid - ImVec2(3.5f, 3.5f), edgeMid + ImVec2(3.5f, 3.5f), StudioColors::AmberAccent);
+                    dl->AddRect(edgeMid - ImVec2(3.5f, 3.5f), edgeMid + ImVec2(3.5f, 3.5f), StudioColors::PanelBody, 0.0f, 1.0f);
+                }
             }
 
             if (isMirrored) {
@@ -1485,14 +1673,32 @@ void drawUvViewport(StudioUiState& state, UvViewportState& uvState,
                     s_gizmoOrigWorldSize = origWorldSz;
                     s_gizmoOrigWorldH = origWorldH;
                 } else {
+                    int hitEdge = -1;
+                    if (isAreaTxt) {
+                        for (int ci = 0; ci < 4; ++ci) {
+                            ImVec2 edgeMid = (obb.corners[ci] + obb.corners[(ci + 1) & 3]) * 0.5f;
+                            if (length(toVec2(io.MousePos - edgeMid)) <= 8.5f) {
+                                hitEdge = ci; // 0=top, 1=right, 2=bottom, 3=left
+                                break;
+                            }
+                        }
+                    }
                     int hitCorner = -1;
-                    for (int ci = 0; ci < 4; ++ci) {
+                    for (int ci = 0; ci < 4 && hitEdge < 0; ++ci) {
                         if (length(toVec2(io.MousePos - obb.corners[ci])) <= 8.5f) {
                             hitCorner = ci;
                             break;
                         }
                     }
-                    if (hitCorner >= 0) {
+                    if (hitEdge >= 0) {
+                        canvas.pushUndoSnapshot();
+                        uvState.gizmoMode = UvViewportState::GizmoDragMode::BoxResizeEdge;
+                        uvState.gizmoCornerIdx = hitEdge;
+                        uvState.gizmoDragStartUv = hoverUv;
+                        uvState.gizmoOrigUvPos = centerUv;
+                        uvState.gizmoOrigBoxW = tItem ? tItem->text.boxWidthPx : tLeg->text.boxWidthPx;
+                        uvState.gizmoOrigBoxH = tItem ? tItem->text.boxHeightPx : tLeg->text.boxHeightPx;
+                    } else if (hitCorner >= 0) {
                         canvas.pushUndoSnapshot();
                         uvState.gizmoMode = UvViewportState::GizmoDragMode::ScaleCorner;
                         uvState.gizmoCornerIdx = hitCorner;
@@ -1519,7 +1725,35 @@ void drawUvViewport(StudioUiState& state, UvViewportState& uvState,
 
             if (uvState.gizmoMode != UvViewportState::GizmoDragMode::None) {
                 if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                    if (uvState.gizmoMode == UvViewportState::GizmoDragMode::Move) {
+                    if (uvState.gizmoMode == UvViewportState::GizmoDragMode::BoxResizeEdge && isAreaTxt) {
+                        TextLayerProps& tx = tItem ? tItem->text : tLeg->text;
+                        float uvScale = std::max(0.25f, static_cast<float>(canvas.width) / 2048.0f);
+                        ImVec2 dScr = io.MousePos - uvToScreen(uvState.gizmoDragStartUv);
+                        float dAlongR = (dScr.x * obb.axisR.x + dScr.y * obb.axisR.y) / std::max(1.0f, uvState.pixelsPerUv);
+                        float dAlongD = (dScr.x * obb.axisD.x + dScr.y * obb.axisD.y) / std::max(1.0f, uvState.pixelsPerUv);
+                        float dPxX = (dAlongR * canvas.width) / uvScale;
+                        float dPxY = (dAlongD * canvas.height) / uvScale;
+                        int edge = uvState.gizmoCornerIdx;
+                        if (edge == 1 || edge == 3) {
+                            float s = (edge == 1) ? 1.0f : -1.0f;
+                            float newW = std::clamp(uvState.gizmoOrigBoxW + s * dPxX, 40.0f, 4096.0f);
+                            float appliedU = ((newW - uvState.gizmoOrigBoxW) * uvScale * s * 0.5f) / canvas.width;
+                            tx.boxWidthPx = newW;
+                            tx.uvPos = uvState.gizmoOrigUvPos + Vec2{obb.axisR.x * appliedU, obb.axisR.y * appliedU};
+                        } else {
+                            float s = (edge == 2) ? 1.0f : -1.0f;
+                            float newH = std::clamp(uvState.gizmoOrigBoxH + s * dPxY, 24.0f, 4096.0f);
+                            float appliedV = ((newH - uvState.gizmoOrigBoxH) * uvScale * s * 0.5f) / canvas.height;
+                            tx.boxHeightPx = newH;
+                            tx.uvPos = uvState.gizmoOrigUvPos + Vec2{obb.axisD.x * appliedV, obb.axisD.y * appliedV};
+                        }
+                        tx.anchoredIn3D = false;
+                        if (tItem) canvas.syncItem2DTo3D(*tItem, &mesh);
+                        else canvas.syncLayer2DTo3D(tLIdx, &mesh);
+                        char bHud[48];
+                        std::snprintf(bHud, sizeof(bHud), "Box %.0f x %.0f", tx.boxWidthPx, tx.boxHeightPx);
+                        drawHudBadge(dl, io.MousePos, bHud, StudioColors::AmberAccent);
+                    } else if (uvState.gizmoMode == UvViewportState::GizmoDragMode::Move) {
                         Vec2 rawPos = uvState.gizmoOrigUvPos + (hoverUv - uvState.gizmoDragStartUv);
                         GuideSnapResult sn = snapUvToGuides(rawPos, uvState, state.showRulers);
                         Vec2 newPos = sn.uv;

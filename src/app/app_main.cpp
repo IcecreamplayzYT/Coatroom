@@ -40,6 +40,8 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
@@ -142,11 +144,14 @@ struct AppState {
     // AppData Recent Projects & Crash Protection (.cr autosave + SEH recovery)
     std::filesystem::path coatroomDataDir;
     std::filesystem::path recentJsonPath;
+    std::filesystem::path thumbsDir;
     std::filesystem::path recoveryDir;
     std::filesystem::path recoveryCrPath;
     std::filesystem::path recoveryMetaPath;
+    std::unordered_map<std::string, std::pair<ID3D11Texture2D*, ID3D11ShaderResourceView*>> thumbGpuCache;
     bool documentDirty = false;
     bool suppressRecentTracking = false;
+    bool returnToHomeIfNoDoc = false;
     double lastAutosaveTime = 0.0;
 };
 
@@ -393,9 +398,130 @@ std::filesystem::path getCoatroomDataDir() {
     return std::filesystem::temp_directory_path() / L"Coatroom";
 }
 
+bool createRgbaTextureSrv(ID3D11Device* dev, const uint8_t* rgba, int w, int h,
+                          ID3D11Texture2D** outTex, ID3D11ShaderResourceView** outSrv) {
+    if (!dev || !rgba || w <= 0 || h <= 0 || !outTex || !outSrv) return false;
+    D3D11_TEXTURE2D_DESC td{};
+    td.Width = static_cast<UINT>(w);
+    td.Height = static_cast<UINT>(h);
+    td.MipLevels = 1;
+    td.ArraySize = 1;
+    td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    td.SampleDesc.Count = 1;
+    td.Usage = D3D11_USAGE_IMMUTABLE;
+    td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+    D3D11_SUBRESOURCE_DATA initData{};
+    initData.pSysMem = rgba;
+    initData.SysMemPitch = static_cast<UINT>(w) * 4u;
+
+    ID3D11Texture2D* tex = nullptr;
+    if (FAILED(dev->CreateTexture2D(&td, &initData, &tex)) || !tex) return false;
+
+    ID3D11ShaderResourceView* srv = nullptr;
+    D3D11_SHADER_RESOURCE_VIEW_DESC srvd{};
+    srvd.Format = td.Format;
+    srvd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    srvd.Texture2D.MipLevels = 1;
+    if (FAILED(dev->CreateShaderResourceView(tex, &srvd, &srv)) || !srv) {
+        tex->Release();
+        return false;
+    }
+    *outTex = tex;
+    *outSrv = srv;
+    return true;
+}
+
+void evictThumbSrv(AppState& app, const std::string& pngPath) {
+    auto it = app.thumbGpuCache.find(pngPath);
+    if (it != app.thumbGpuCache.end()) {
+        if (it->second.second) it->second.second->Release();
+        if (it->second.first) it->second.first->Release();
+        app.thumbGpuCache.erase(it);
+    }
+}
+
+void releaseAllThumbSrvs(AppState& app) {
+    for (auto& kv : app.thumbGpuCache) {
+        if (kv.second.second) kv.second.second->Release();
+        if (kv.second.first) kv.second.first->Release();
+    }
+    app.thumbGpuCache.clear();
+    for (auto& r : app.uiState.recentProjects) r.thumbTex = 0;
+}
+
+ImTextureID loadThumbPngToSrv(AppState& app, const std::string& pngPath) {
+    if (pngPath.empty() || !app.renderer.device()) return 0;
+    auto it = app.thumbGpuCache.find(pngPath);
+    if (it != app.thumbGpuCache.end()) {
+        return reinterpret_cast<ImTextureID>(it->second.second);
+    }
+    std::error_code ec;
+    if (!std::filesystem::exists(pngPath, ec)) return 0;
+    int w = 0, h = 0, ch = 0;
+    uint8_t* rgba = stbi_load(pngPath.c_str(), &w, &h, &ch, 4);
+    if (!rgba || w <= 0 || h <= 0) {
+        if (rgba) stbi_image_free(rgba);
+        return 0;
+    }
+    ID3D11Texture2D* tex = nullptr;
+    ID3D11ShaderResourceView* srv = nullptr;
+    bool ok = createRgbaTextureSrv(app.renderer.device(), rgba, w, h, &tex, &srv);
+    stbi_image_free(rgba);
+    if (!ok) return 0;
+    app.thumbGpuCache[pngPath] = {tex, srv};
+    return reinterpret_cast<ImTextureID>(srv);
+}
+
+std::string fnv1a64HexLower(const std::string& s) {
+    uint64_t h = 14695981039346656037ull;
+    for (unsigned char ch : s) {
+        unsigned char lc = static_cast<unsigned char>(std::tolower(ch));
+        h ^= lc;
+        h *= 1099511628211ull;
+    }
+    char buf[20] = {};
+    std::snprintf(buf, sizeof(buf), "%016llx", static_cast<unsigned long long>(h));
+    return buf;
+}
+
+std::string captureFront34Thumbnail(AppState& app, const std::string& targetPath) {
+    if (!app.mesh.loaded || app.thumbsDir.empty() || targetPath.empty()) return {};
+    std::error_code ec;
+    std::filesystem::create_directories(app.thumbsDir, ec);
+    std::string outPng = (app.thumbsDir / (fnv1a64HexLower(targetPath) + ".png")).string();
+
+    syncCanvasGpu(app, true);
+    syncMeshGpu(app);
+
+    lps::RenderSceneParams tp = app.sceneParams;
+    lps::Vec3 center = app.mesh.bounds.center();
+    float maxExt = std::max({app.mesh.bounds.extent().x, app.mesh.bounds.extent().y,
+                             app.mesh.bounds.extent().z, 1.0f});
+    float fitDist = maxExt * 1.24f;
+    const float yaw = 0.72f;
+    const float pitch = 0.24f;
+    float cp = std::cos(pitch), sp = std::sin(pitch);
+    float cy = std::cos(yaw), sy = std::sin(yaw);
+    tp.camTarget = center;
+    tp.camEye = center + lps::Vec3{cp * sy * fitDist, sp * fitDist, cp * cy * fitDist};
+    tp.camUp = lps::Vec3{0.0f, 1.0f, 0.0f};
+    tp.orthographic = false;
+    tp.shadingMode = lps::RenderShadingMode::ShowroomRendered;
+    tp.showSelectionOverlay = false;
+    tp.showWireframeOverlay = false;
+
+    if (!app.renderer.renderBeautyShotToPng(app.mesh, tp, outPng, 320, 180)) {
+        return {};
+    }
+    evictThumbSrv(app, outPng);
+    return outPng;
+}
+
 void initCoatroomStoragePaths(AppState& app, const std::filesystem::path& baseDir) {
     app.coatroomDataDir = baseDir;
     app.recentJsonPath = baseDir / "recent.json";
+    app.thumbsDir = baseDir / "thumbs";
     app.recoveryDir = baseDir / "recovery";
     app.recoveryCrPath = app.recoveryDir / "autosave_recovery.cr";
     app.recoveryMetaPath = app.recoveryDir / "recovery_meta.json";
@@ -415,7 +541,8 @@ bool saveRecentProjectsFile(const std::filesystem::path& jsonPath,
         ofs << "    {\"name\":\"" << jsonEscapeStr(r.name)
             << "\",\"path\":\"" << jsonEscapeStr(r.path)
             << "\",\"kind\":\"" << jsonEscapeStr(r.kind)
-            << "\",\"detail\":\"" << jsonEscapeStr(r.detail) << "\"}"
+            << "\",\"detail\":\"" << jsonEscapeStr(r.detail)
+            << "\",\"thumbPath\":\"" << jsonEscapeStr(r.thumbPath) << "\"}"
             << (i + 1 < items.size() ? "," : "") << "\n";
     }
     ofs << "  ]\n}\n";
@@ -451,6 +578,7 @@ std::vector<lps::RecentProjectEntry> loadRecentProjectsFile(const std::filesyste
                 e.path = extractJsonStringField(obj, "path");
                 e.kind = extractJsonStringField(obj, "kind");
                 e.detail = extractJsonStringField(obj, "detail");
+                e.thumbPath = extractJsonStringField(obj, "thumbPath");
                 if (!e.path.empty()) {
                     if (e.name.empty()) e.name = std::filesystem::path(e.path).stem().string();
                     out.push_back(std::move(e));
@@ -487,6 +615,12 @@ void pushRecentProject(AppState& app, const std::string& rawPath, const std::str
     if (entry.name.empty()) entry.name = absPath;
     entry.kind = kind;
     entry.detail = detail.empty() ? formatLocalTimestamp() : detail;
+    if (app.mesh.loaded) {
+        entry.thumbPath = captureFront34Thumbnail(app, absPath);
+        if (!entry.thumbPath.empty()) {
+            entry.thumbTex = loadThumbPngToSrv(app, entry.thumbPath);
+        }
+    }
 
     auto& list = app.uiState.recentProjects;
     list.erase(std::remove_if(list.begin(), list.end(), [&](const lps::RecentProjectEntry& r) {
@@ -574,38 +708,10 @@ std::filesystem::path findBundledFileW(const wchar_t* relName) {
 bool createAppLogoSrv(AppState& app) {
     ID3D11Device* dev = app.renderer.device();
     if (!dev) return false;
-    std::vector<uint8_t> rgba = lps::renderBrandLogoRgba(64);
-    if (rgba.size() != static_cast<size_t>(64) * 64 * 4) return false;
-
-    D3D11_TEXTURE2D_DESC td{};
-    td.Width = 64;
-    td.Height = 64;
-    td.MipLevels = 1;
-    td.ArraySize = 1;
-    td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    td.SampleDesc.Count = 1;
-    td.Usage = D3D11_USAGE_IMMUTABLE;
-    td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-
-    D3D11_SUBRESOURCE_DATA initData{};
-    initData.pSysMem = rgba.data();
-    initData.SysMemPitch = 64 * 4;
-
-    ID3D11Texture2D* tex = nullptr;
-    if (FAILED(dev->CreateTexture2D(&td, &initData, &tex)) || !tex) return false;
-
-    ID3D11ShaderResourceView* srv = nullptr;
-    D3D11_SHADER_RESOURCE_VIEW_DESC srvd{};
-    srvd.Format = td.Format;
-    srvd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-    srvd.Texture2D.MipLevels = 1;
-    if (FAILED(dev->CreateShaderResourceView(tex, &srvd, &srv)) || !srv) {
-        tex->Release();
-        return false;
-    }
-    app.appLogoGpuTex = tex;
-    app.appLogoSrv = srv;
-    app.uiState.appLogoTex = reinterpret_cast<ImTextureID>(srv);
+    std::vector<uint8_t> rgba = lps::renderBrandLogoRgba(20);
+    if (rgba.size() != static_cast<size_t>(20) * 20 * 4) return false;
+    if (!createRgbaTextureSrv(dev, rgba.data(), 20, 20, &app.appLogoGpuTex, &app.appLogoSrv)) return false;
+    app.uiState.appLogoTex = reinterpret_cast<ImTextureID>(app.appLogoSrv);
     return true;
 }
 
@@ -805,6 +911,7 @@ int parseRichTooltipArg(const std::string& raw) {
     if (s == "fill" || s == "floodfill" || s == "bucket" || s == "k") return static_cast<int>(lps::StudioTool::Fill);
     if (s == "eyedropper" || s == "i") return static_cast<int>(lps::StudioTool::Eyedropper);
     if (s == "text" || s == "type" || s == "t") return static_cast<int>(lps::StudioTool::Text);
+    if (s == "touchtype" || s == "touch" || s == "shiftt") return static_cast<int>(lps::StudioTool::TouchType);
     if (s == "image" || s == "decal" || s == "sponsordecal" || s == "d") return static_cast<int>(lps::StudioTool::Image);
     if (s == "vertex" || s == "vertexedit" || s == "edit") return static_cast<int>(lps::StudioTool::VertexEdit);
     if (s == "mask" || s == "facemask" || s == "facepaintmask" || s == "f") return static_cast<int>(lps::StudioTool::FacePaintMask);
@@ -1932,9 +2039,37 @@ void handle3DViewportInput(AppState& app) {
     };
 
     if (app.uiState.activeTool == lps::StudioTool::Text ||
+        app.uiState.activeTool == lps::StudioTool::TouchType ||
         app.uiState.activeTool == lps::StudioTool::SponsorDecal ||
         app.uiState.activeTool == lps::StudioTool::SelectMove) {
         if (hovered && allowLmbTool && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            // In Touch Type (Shift+T), clicking a letter on the 3D surface selects that character directly
+            if (app.uiState.activeTool == lps::StudioTool::TouchType && app.hoverHit3D.hit) {
+                auto* actIt = app.canvas.activeVectorItem();
+                if (actIt && actIt->kind == lps::VectorItemKind::Text && !actIt->text.lastCharBoxesUv.empty()) {
+                    float bestD = 0.03f;
+                    int bestCi = -1;
+                    for (int ci = 0; ci < static_cast<int>(actIt->text.lastCharBoxesUv.size()); ++ci) {
+                        const auto& cb = actIt->text.lastCharBoxesUv[ci];
+                        if (app.hoverHit3D.uv.x >= cb.uvMin.x && app.hoverHit3D.uv.x <= cb.uvMax.x &&
+                            app.hoverHit3D.uv.y >= cb.uvMin.y && app.hoverHit3D.uv.y <= cb.uvMax.y) {
+                            bestCi = ci;
+                            break;
+                        }
+                        float cx = (cb.uvMin.x + cb.uvMax.x) * 0.5f;
+                        float cy = (cb.uvMin.y + cb.uvMax.y) * 0.5f;
+                        float d = std::hypot(app.hoverHit3D.uv.x - cx, app.hoverHit3D.uv.y - cy);
+                        if (d < bestD) { bestD = d; bestCi = ci; }
+                    }
+                    if (bestCi >= 0) {
+                        actIt->text.selectedCharIdx = bestCi;
+                        actIt->text.syncCharStyles();
+                        app.uiState.activePropsCat = lps::PropertiesCategory::Text;
+                        app.uiState.statusText = "Touch Type: selected letter #" + std::to_string(bestCi + 1);
+                        return;
+                    }
+                }
+            }
             GizmoDrag3D pickedMode = GizmoDrag3D::None;
             int pickedLayerIdx = -1;
             int pickedItemIdx = -1;
@@ -2083,6 +2218,9 @@ void handle3DViewportInput(AppState& app) {
                     app.canvas.pushUndoSnapshot();
                     lps::TextLayerProps tp{};
                     tp.text = "Lorem ipsum";
+                    tp.fontFamily = "Arial";
+                    tp.fontStyle = "Bold";
+                    tp.fontPath = app.canvas.findFontPath("", tp.fontFamily, tp.fontStyle);
                     tp.fillColor = app.uiState.brush.color;
                     tp.outlineColor = app.uiState.secondaryColor;
                     tp.mirrorMode =
@@ -2340,6 +2478,7 @@ void draw3DViewportHudOverlay(const AppState& app) {
         (app.uiState.activeTool == lps::StudioTool::SelectMove ||
          app.uiState.activeTool == lps::StudioTool::RectBox ||
          app.uiState.activeTool == lps::StudioTool::Text ||
+         app.uiState.activeTool == lps::StudioTool::TouchType ||
          app.uiState.activeTool == lps::StudioTool::SponsorDecal)) {
         Frame3D f{};
         bool hasFrame = false;
@@ -2606,6 +2745,15 @@ void handleShortcuts(AppState& app, const lps::StudioCallbacks& callbacks) {
         return;
     }
 
+    if (!io.KeyCtrl && !io.KeyAlt && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_T, false)) {
+        app.uiState.activeMode = lps::StudioMode::TexturePaint;
+        app.uiState.activeTool = lps::StudioTool::TouchType;
+        app.uiState.activeTypeToolVariant = 1;
+        app.uiState.activePropsCat = lps::PropertiesCategory::Text;
+        app.uiState.statusText = "Touch Type Tool (Shift+T)";
+        return;
+    }
+
     if (!io.KeyCtrl && !io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_Delete, false)) {
         if (app.canvas.activeVectorItem()) {
             int lIdx = app.canvas.activeLayerIdx;
@@ -2672,6 +2820,8 @@ void handleShortcuts(AppState& app, const lps::StudioCallbacks& callbacks) {
         } else if (ImGui::IsKeyPressed(ImGuiKey_T, false)) {
             app.uiState.activeMode = lps::StudioMode::TexturePaint;
             app.uiState.activeTool = lps::StudioTool::Text;
+            app.uiState.activeTypeToolVariant = 0;
+            app.uiState.activePropsCat = lps::PropertiesCategory::Text;
         } else if (ImGui::IsKeyPressed(ImGuiKey_D, false)) {
             app.uiState.activeMode = lps::StudioMode::TexturePaint;
             app.uiState.activeTool = lps::StudioTool::SponsorDecal;
@@ -2739,6 +2889,11 @@ lps::StudioCallbacks makeCallbacks(AppState& app) {
                 app.uiState.canvasResolution = app.canvas.width;
                 if (app.canvas.width != prevW) app.uvState.needsInitialFit = true;
                 syncCanvasGpu(app);
+                app.uiState.hasActiveDocument = true;
+                app.uiState.showHomeScreen = false;
+                app.documentDirty = false;
+                pushRecentProject(app, p, ".png",
+                                  std::to_string(app.canvas.width) + "x" + std::to_string(app.canvas.height) + "px");
                 app.uiState.statusText = "Loaded livery base: " + std::filesystem::path(p).filename().string();
             } else {
                 app.uiState.statusText = "Failed to load livery image";
@@ -2851,42 +3006,19 @@ lps::StudioCallbacks makeCallbacks(AppState& app) {
             openProjectFilePath(app, p, false);
         }
     };
-    cb.onStartPreset = [&app](int presetIdx) {
+    cb.onStartPreset = [&app, &cb](int presetIdx) {
         if (presetIdx == 0) {
-            quickLoadPorsche(app, false);
+            app.returnToHomeIfNoDoc = true;
+            if (cb.onLoadProject) cb.onLoadProject();
         } else if (presetIdx == 1) {
-            std::filesystem::path scPath = findBundledFileW(L"examples\\safety_car\\safety_car_v12.cr");
-            if (!scPath.empty()) {
-                openProjectFilePath(app, scPath.string(), false);
-            } else {
-                quickLoadPorsche(app, true);
-            }
-        } else if (presetIdx == 2 || presetIdx == 3) {
-            int res = (presetIdx == 3) ? 2048 : 4096;
-            app.uiState.canvasResolution = res;
-            app.mesh = lps::ObjMesh{};
-            app.uiState.activeMeshPath.clear();
-            app.uiState.meshGpuDirty = true;
-            syncMeshGpu(app);
-            app.canvas.init(res, lps::Color4u8{238, 240, 244, 255});
-            app.uiState.activeProjectPath.clear();
-            app.uiState.textEditSyncedLayerId = 0;
-            app.gizmoDrag3D = GizmoDrag3D::None;
-            app.gizmoLayerIdx3D = -1;
-            app.gizmoItemIdx3D = -1;
-            app.uvState.needsInitialFit = true;
-            syncCanvasGpu(app);
-            app.uiState.hasActiveDocument = true;
-            app.uiState.showHomeScreen = false;
-            app.documentDirty = false;
-            app.uiState.statusText = "Started fresh " + std::to_string(res) + "x" + std::to_string(res) + " livery canvas";
-        } else if (presetIdx == 4) {
-            std::string p = lps::dialogs::openObjDialog(app.hwnd);
-            if (!p.empty()) {
-                loadMeshFile(app, p, false);
-            } else if (!app.uiState.hasActiveDocument) {
-                app.uiState.showHomeScreen = true;
-            }
+            app.returnToHomeIfNoDoc = true;
+            if (cb.onOpenObj) cb.onOpenObj();
+        } else if (presetIdx == 2) {
+            app.returnToHomeIfNoDoc = true;
+            if (cb.onOpenLiveryPng) cb.onOpenLiveryPng();
+        } else {
+            app.uiState.canvasResolution = 4096;
+            if (cb.onNewProject) cb.onNewProject();
         }
     };
     cb.onOpenRecent = [&app](const std::string& path) {
@@ -3342,6 +3474,13 @@ void renderFrame(AppState& app, const lps::StudioCallbacks& callbacks,
     handleShortcuts(app, callbacks);
     lps::drawStudioWorkspace(app.uiState, app.uvState, app.canvas, app.mesh, callbacks);
     handle3DViewportInput(app);
+
+    if (app.returnToHomeIfNoDoc) {
+        app.returnToHomeIfNoDoc = false;
+        if (!app.uiState.hasActiveDocument) {
+            app.uiState.showHomeScreen = true;
+        }
+    }
 
     if (app.uiState.requestCopySelection) {
         app.uiState.requestCopySelection = false;
@@ -3967,10 +4106,11 @@ int runSmokeTest(AppState& app, const lps::StudioCallbacks& callbacks, const std
                     msSince(), otaRep.c_str());
     }
 
-    // 12. Crash Protection (.cr autosave/recovery) & Recent Projects JSON + Home Screen UI Render
+    // 12. Crash Protection (.cr autosave/recovery) & Recent Projects JSON + 3/4 Car Thumbnail + Home Screen UI
     {
         auto savedStorageDir = app.coatroomDataDir;
         auto savedRecentPath = app.recentJsonPath;
+        auto savedThumbsDir = app.thumbsDir;
         auto savedRecDir = app.recoveryDir;
         auto savedRecCr = app.recoveryCrPath;
         auto savedRecMeta = app.recoveryMetaPath;
@@ -3980,24 +4120,34 @@ int runSmokeTest(AppState& app, const lps::StudioCallbacks& callbacks, const std
         bool savedHome = app.uiState.showHomeScreen;
         bool savedRecBanner = app.uiState.hasRecoveryBanner;
 
+        // Re-load painted Porsche 992 GT3 R (from Check 2-5 smoke_project.cr) so we render a real Front 3/4th Porsche preview card!
+        std::string smokeCr = (std::filesystem::path(outDir) / "smoke_project.cr").string();
+        lps::CanvasEngine savedCanvasBackup = app.canvas;
+        if (std::filesystem::exists(kPorscheObjPath)) {
+            app.suppressRecentTracking = true;
+            quickLoadPorsche(app, std::filesystem::exists(kPorscheLiveryPath));
+        }
+
         std::filesystem::path smokeAppData = std::filesystem::path(outDir) / "smoke_appdata";
         std::filesystem::remove_all(smokeAppData, ec);
         initCoatroomStoragePaths(app, smokeAppData);
         app.uiState.recentProjects.clear();
         app.suppressRecentTracking = false;
 
-        std::string dummyCr = (std::filesystem::path(outDir) / "smoke_project.cr").string();
         pushRecentProject(app, kPorscheObjPath, ".obj", "Porsche 992 GT3 R (4K)");
-        pushRecentProject(app, dummyCr, ".cr", "4096x4096px | 4 layers");
+        pushRecentProject(app, smokeCr, ".cr", "4096x4096px | Painted Project");
         pushRecentProject(app, kPorscheObjPath, ".obj", "Porsche Re-opened"); // must deduplicate & promote to index 0
 
         auto reloadedRec = loadRecentProjectsFile(app.recentJsonPath);
-        if (reloadedRec.size() != 2 || reloadedRec[0].kind != ".obj" || reloadedRec[1].kind != ".cr") {
-            std::fprintf(stderr, "[SMOKE FAIL] Recent projects JSON roundtrip/dedup failed (count=%zu)\n", reloadedRec.size());
+        if (reloadedRec.size() != 2 || reloadedRec[0].kind != ".obj" || reloadedRec[1].kind != ".cr" ||
+            reloadedRec[0].thumbPath.empty() || !std::filesystem::exists(reloadedRec[0].thumbPath) ||
+            app.uiState.recentProjects[0].thumbTex == 0) {
+            std::fprintf(stderr, "[SMOKE FAIL] Recent projects JSON / 320x180 Front 3/4 thumbnail check failed (count=%zu, thumb='%s')\n",
+                         reloadedRec.size(), reloadedRec.empty() ? "" : reloadedRec[0].thumbPath.c_str());
             return 45;
         }
 
-        // Write recovery snapshot & verify reload + banner + summary + Home Screen UI frame
+        // Write recovery snapshot & verify reload + banner + summary + Home Screen UI frame + screenshot
         app.uiState.hasActiveDocument = true;
         if (!writeRecoverySnapshot(app, "Smoke Autosave") ||
             !std::filesystem::exists(app.recoveryCrPath) ||
@@ -4014,13 +4164,22 @@ int runSmokeTest(AppState& app, const lps::StudioCallbacks& callbacks, const std
         app.uiState.showHomeScreen = true;
         app.uiState.hasRecoveryBanner = true;
         app.uiState.recoveryInfoText = recSum;
-        for (int f = 0; f < 2; ++f) {
+        std::vector<uint8_t> homeBackbuf;
+        int homeW = 0, homeH = 0;
+        for (int f = 0; f < 3; ++f) {
             MSG msg{};
             while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
-            renderFrame(app, callbacks);
+            if (f == 2) renderFrame(app, callbacks, &homeBackbuf, &homeW, &homeH);
+            else renderFrame(app, callbacks);
+        }
+        DwmFlush();
+        std::string homePreviewShot = (std::filesystem::path(outDir) / "smoke_home_ui.png").string();
+        if (!captureWindowPng(app.hwnd, homeBackbuf, homeW, homeH, homePreviewShot)) {
+            std::fprintf(stderr, "[SMOKE FAIL] Home Screen screenshot with Recent 3/4 car preview failed\n");
+            return 50;
         }
 
         lps::CanvasEngine recCanvas;
@@ -4036,8 +4195,10 @@ int runSmokeTest(AppState& app, const lps::StudioCallbacks& callbacks, const std
             return 49;
         }
 
+        app.canvas = std::move(savedCanvasBackup);
         app.coatroomDataDir = savedStorageDir;
         app.recentJsonPath = savedRecentPath;
+        app.thumbsDir = savedThumbsDir;
         app.recoveryDir = savedRecDir;
         app.recoveryCrPath = savedRecCr;
         app.recoveryMetaPath = savedRecMeta;
@@ -4046,8 +4207,72 @@ int runSmokeTest(AppState& app, const lps::StudioCallbacks& callbacks, const std
         app.uiState.hasActiveDocument = savedHasDoc;
         app.uiState.showHomeScreen = savedHome;
         app.uiState.hasRecoveryBanner = savedRecBanner;
-        std::printf("[SMOKE %lld ms] Home Screen + Recent JSON (%zu entries) + Crash Recovery (.cr) verified!\n",
-                    msSince(), reloadedRec.size());
+        std::printf("[SMOKE %lld ms] Home Screen + Recent JSON (%zu entries, 320x180 3/4 thumb OK) + Crash Recovery (.cr) -> %s\n",
+                    msSince(), reloadedRec.size(), homePreviewShot.c_str());
+    }
+
+    // 13. Grouped Human-Readable Fonts + Area Type Word Wrap + Per-Letter Color (Touch Type)
+    {
+        if (app.canvas.fontFamilies.empty() ||
+            app.canvas.findFontPath("", "Arial", "Bold").empty()) {
+            std::fprintf(stderr, "[SMOKE FAIL] Grouped fontFamilies / Arial Bold resolution failed (families=%zu)\n",
+                         app.canvas.fontFamilies.size());
+            return 51;
+        }
+        lps::CanvasEngine typeTest;
+        typeTest.init(1024, lps::Color4u8{20, 20, 24, 255});
+        typeTest.ensureEditableLayer();
+        lps::TextLayerProps tp{};
+        tp.text = "RED BLUE";
+        tp.fontFamily = "Arial";
+        tp.fontStyle = "Bold";
+        tp.fontPath = app.canvas.findFontPath("", tp.fontFamily, tp.fontStyle);
+        tp.fontSizePx = 120.0f;
+        tp.isAreaBox = true;
+        tp.boxWidthPx = 260.0f; // wraps "BLUE" onto line 2
+        tp.boxHeightPx = 320.0f;
+        tp.anchoredIn3D = false;
+        tp.uvPos = {0.5f, 0.5f};
+        tp.syncCharStyles();
+        tp.charStyles[0].hasColor = true;
+        tp.charStyles[0].color = lps::Color4u8{240, 25, 25, 255}; // R
+        tp.charStyles[4].hasColor = true;
+        tp.charStyles[4].color = lps::Color4u8{25, 90, 245, 255}; // B
+        int ti = typeTest.addTextItem("Smoke Type", tp, nullptr);
+        if (ti < 0) {
+            std::fprintf(stderr, "[SMOKE FAIL] addTextItem failed in Check 13\n");
+            return 52;
+        }
+        const auto& boxes = typeTest.layers[typeTest.activeLayerIdx].items[ti].text.lastCharBoxesUv;
+        if (boxes.size() < 8 || boxes[4].uvMin.y <= boxes[0].uvMin.y + 0.02f) {
+            std::fprintf(stderr, "[SMOKE FAIL] Area Box word wrap failed (y0=%.3f, y4=%.3f)\n",
+                         boxes.empty() ? 0.0f : boxes[0].uvMin.y, boxes.size() > 4 ? boxes[4].uvMin.y : 0.0f);
+            return 53;
+        }
+        auto maxRedInBox = [&](const lps::CharBoxUv& b, bool checkRed) {
+            int x0 = std::clamp(static_cast<int>(b.uvMin.x * 1024.0f), 0, 1023);
+            int x1 = std::clamp(static_cast<int>(b.uvMax.x * 1024.0f), 0, 1023);
+            int y0 = std::clamp(static_cast<int>(b.uvMin.y * 1024.0f), 0, 1023);
+            int y1 = std::clamp(static_cast<int>(b.uvMax.y * 1024.0f), 0, 1023);
+            int best = 0;
+            for (int y = y0; y <= y1; ++y) {
+                for (int x = x0; x <= x1; ++x) {
+                    size_t o = (static_cast<size_t>(y) * 1024u + x) * 4u;
+                    int val = checkRed ? (typeTest.compositeRgba[o + 0] - typeTest.compositeRgba[o + 2])
+                                       : (typeTest.compositeRgba[o + 2] - typeTest.compositeRgba[o + 0]);
+                    best = std::max(best, val);
+                }
+            }
+            return best;
+        };
+        int redDiff = maxRedInBox(boxes[0], true);
+        int blueDiff = maxRedInBox(boxes[4], false);
+        if (redDiff < 120 || blueDiff < 120) {
+            std::fprintf(stderr, "[SMOKE FAIL] Per-char color mismatch (redDiff=%d, blueDiff=%d)\n", redDiff, blueDiff);
+            return 54;
+        }
+        std::printf("[SMOKE %lld ms] Grouped fonts (%zu families) + Area Box wrap + Per-letter color (R=%d, B=%d) verified!\n",
+                    msSince(), app.canvas.fontFamilies.size(), redDiff, blueDiff);
     }
 
     std::printf("[SMOKE PASS] All automated checks passed!\n");
@@ -4466,16 +4691,9 @@ int main(int argc, char** argv) {
 
     if (!smokeTest && cliScriptPath.empty() && !mcpStdio) {
         app.uiState.recentProjects = loadRecentProjectsFile(app.recentJsonPath);
-        if (app.uiState.recentProjects.empty()) {
-            std::error_code recEc;
-            std::filesystem::path scCr = findBundledFileW(L"examples\\safety_car\\safety_car_v12.cr");
-            if (!scCr.empty() && std::filesystem::exists(scCr, recEc)) {
-                app.uiState.recentProjects.push_back(
-                    {"Safety Car v1.2", scCr.string(), ".cr", "4096x4096px | Preset Project", 0});
-            }
-            if (std::filesystem::exists(kPorscheObjPath, recEc)) {
-                app.uiState.recentProjects.push_back(
-                    {"Porsche 992 GT3 R - 2023", kPorscheObjPath, ".obj", "84,103 tris | 3D GT3 Car", 0});
+        for (auto& rec : app.uiState.recentProjects) {
+            if (!rec.thumbPath.empty()) {
+                rec.thumbTex = loadThumbPngToSrv(app, rec.thumbPath);
             }
         }
         std::error_code recEc;
@@ -4650,6 +4868,7 @@ int main(int argc, char** argv) {
     ImGui::DestroyContext();
 
     releaseAppLogoSrv(app);
+    releaseAllThumbSrvs(app);
     app.renderer.shutdown();
     DestroyWindow(app.hwnd);
     UnregisterClassW(wc.lpszClassName, hInst);
