@@ -1,0 +1,1769 @@
+{
+  "commands": [
+    {
+      "op": "new_project",
+      "size": 4096,
+      "baseColor": [
+        236,
+        240,
+        246,
+        255
+      ]
+    },
+    {
+      "op": "load_obj",
+      "path": "C:/Users/MyHP _)/Downloads/Porsche 992 GT3 R - 2023.obj",
+      "preserveCanvas": true
+    },
+    {
+      "op": "load_ao",
+      "path": "C:/Users/MyHP _)/.gemini/antigravity/scratch/Porsche_992_GT3R_Livery_Template/Shared_Templates_And_Previews/Porsche_992_GT3R_Panels_4K.png",
+      "visible": true
+    },
+    {
+      "op": "add_paint_layer",
+      "name": "Carbon Aero Trim"
+    },
+    {
+      "op": "paint_rect_3d",
+      "layer": "Carbon Aero Trim",
+      "rayOrigin": [
+        0.0,
+        0.1,
+        3.0
+      ],
+      "rayDir": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "worldW": 1.72,
+      "worldH": 0.22,
+      "fillColor": [
+        22,
+        25,
+        30,
+        255
+      ],
+      "strokeColor": [
+        232,
+        255,
+        24,
+        255
+      ],
+      "strokeWidth": 0.012,
+      "mirrorX": false
+    },
+    {
+      "op": "paint_rect_3d",
+      "layer": "Carbon Aero Trim",
+      "rayOrigin": [
+        0.0,
+        0.28,
+        3.0
+      ],
+      "rayDir": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "worldW": 1.44,
+      "worldH": 0.12,
+      "fillColor": [
+        22,
+        25,
+        30,
+        255
+      ],
+      "strokeColor": [
+        232,
+        255,
+        24,
+        255
+      ],
+      "strokeWidth": 0.008,
+      "mirrorX": false
+    },
+    {
+      "op": "paint_rect_3d",
+      "layer": "Carbon Aero Trim",
+      "rayOrigin": [
+        3.0,
+        0.09,
+        0.1
+      ],
+      "rayDir": [
+        -1.0,
+        0.0,
+        0.0
+      ],
+      "worldW": 1.48,
+      "worldH": 0.18,
+      "fillColor": [
+        22,
+        25,
+        30,
+        255
+      ],
+      "strokeColor": [
+        232,
+        255,
+        24,
+        255
+      ],
+      "strokeWidth": 0.01,
+      "mirrorX": true
+    },
+    {
+      "op": "paint_rect_3d",
+      "layer": "Carbon Aero Trim",
+      "rayOrigin": [
+        0.0,
+        0.18,
+        -3.0
+      ],
+      "rayDir": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "worldW": 1.54,
+      "worldH": 0.26,
+      "fillColor": [
+        22,
+        25,
+        30,
+        255
+      ],
+      "strokeColor": [
+        232,
+        255,
+        24,
+        255
+      ],
+      "strokeWidth": 0.01,
+      "mirrorX": false
+    },
+    {
+      "op": "paint_rect_3d",
+      "layer": "Carbon Aero Trim",
+      "rayOrigin": [
+        0.0,
+        3.0,
+        -2.09
+      ],
+      "rayDir": [
+        0.0,
+        -1.0,
+        0.0
+      ],
+      "worldW": 1.76,
+      "worldH": 0.36,
+      "fillColor": [
+        24,
+        28,
+        34,
+        255
+      ],
+      "strokeColor": [
+        232,
+        255,
+        24,
+        255
+      ],
+      "strokeWidth": 0.014,
+      "mirrorX": false
+    },
+    {
+      "op": "paint_rect_3d",
+      "layer": "Carbon Aero Trim",
+      "rayOrigin": [
+        3.0,
+        1.02,
+        -2.04
+      ],
+      "rayDir": [
+        -1.0,
+        0.0,
+        0.0
+      ],
+      "worldW": 0.44,
+      "worldH": 0.26,
+      "fillColor": [
+        22,
+        25,
+        30,
+        255
+      ],
+      "strokeColor": [
+        232,
+        255,
+        24,
+        255
+      ],
+      "strokeWidth": 0.012,
+      "mirrorX": true
+    },
+    {
+      "op": "paint_stroke_3d",
+      "layer": "Carbon Aero Trim",
+      "color": [
+        22,
+        25,
+        30,
+        255
+      ],
+      "worldRadius": 0.055,
+      "hardness": 0.92,
+      "mirrorX": true,
+      "points": [
+        {
+          "rayOrigin": [
+            0.62,
+            0.26,
+            3.0
+          ],
+          "rayDir": [
+            0.0,
+            0.0,
+            -1.0
+          ]
+        },
+        {
+          "rayOrigin": [
+            0.74,
+            0.3,
+            3.0
+          ],
+          "rayDir": [
+            0.0,
+            0.0,
+            -1.0
+          ]
+        },
+        {
+          "rayOrigin": [
+            0.85,
+            0.36,
+            3.0
+          ],
+          "rayDir": [
+            0.0,
+            0.0,
+            -1.0
+          ]
+        }
+      ]
+    },
+    {
+      "op": "add_layer",
+      "name": "Safety Aero Vectors"
+    },
+    {
+      "op": "add_pen",
+      "name": "Hood Carbon Wing",
+      "closed": true,
+      "filled": true,
+      "hasStroke": true,
+      "use3DSpace": true,
+      "mirrorX": true,
+      "fillColor": [
+        24,
+        28,
+        34,
+        255
+      ],
+      "strokeColor": [
+        232,
+        255,
+        24,
+        255
+      ],
+      "widthPx": 10,
+      "worldWidth": 0.016,
+      "endTaper": 0,
+      "nodes": [
+        {
+          "rayOrigin": [
+            0.5,
+            3.0,
+            1.32
+          ],
+          "rayDir": [
+            0,
+            -1,
+            0
+          ],
+          "handleInOffset3D": [
+            -0.03,
+            0.0,
+            -0.05
+          ],
+          "handleOutOffset3D": [
+            0.06,
+            0.0,
+            -0.01
+          ],
+          "smooth": true
+        },
+        {
+          "rayOrigin": [
+            0.74,
+            3.0,
+            1.28
+          ],
+          "rayDir": [
+            0,
+            -1,
+            0
+          ],
+          "handleInOffset3D": [
+            -0.05,
+            0.0,
+            0.02
+          ],
+          "handleOutOffset3D": [
+            0.01,
+            0.0,
+            -0.06
+          ],
+          "smooth": true
+        },
+        {
+          "rayOrigin": [
+            0.7,
+            3.0,
+            1.04
+          ],
+          "rayDir": [
+            0,
+            -1,
+            0
+          ],
+          "handleInOffset3D": [
+            0.02,
+            0.0,
+            0.05
+          ],
+          "handleOutOffset3D": [
+            -0.06,
+            0.0,
+            0.01
+          ],
+          "smooth": true
+        },
+        {
+          "rayOrigin": [
+            0.48,
+            3.0,
+            1.08
+          ],
+          "rayDir": [
+            0,
+            -1,
+            0
+          ],
+          "handleInOffset3D": [
+            0.05,
+            0.0,
+            -0.01
+          ],
+          "handleOutOffset3D": [
+            -0.01,
+            0.0,
+            0.05
+          ],
+          "smooth": true
+        }
+      ]
+    },
+    {
+      "op": "add_pen",
+      "name": "Hood Yellow Aero Blade",
+      "closed": true,
+      "filled": true,
+      "hasStroke": true,
+      "use3DSpace": true,
+      "mirrorX": true,
+      "fillColor": [
+        232,
+        255,
+        24,
+        255
+      ],
+      "strokeColor": [
+        20,
+        24,
+        30,
+        255
+      ],
+      "widthPx": 10,
+      "worldWidth": 0.016,
+      "endTaper": 0,
+      "nodes": [
+        {
+          "rayOrigin": [
+            0.22,
+            3.0,
+            2.02
+          ],
+          "rayDir": [
+            0,
+            -1,
+            0
+          ],
+          "handleInOffset3D": [
+            -0.04,
+            0.0,
+            -0.03
+          ],
+          "handleOutOffset3D": [
+            0.12,
+            0.0,
+            -0.04
+          ],
+          "smooth": true
+        },
+        {
+          "rayOrigin": [
+            0.64,
+            3.0,
+            1.88
+          ],
+          "rayDir": [
+            0,
+            -1,
+            0
+          ],
+          "handleInOffset3D": [
+            -0.09,
+            0.0,
+            0.06
+          ],
+          "handleOutOffset3D": [
+            0.02,
+            0.0,
+            -0.06
+          ],
+          "smooth": true
+        },
+        {
+          "rayOrigin": [
+            0.56,
+            3.0,
+            1.72
+          ],
+          "rayDir": [
+            0,
+            -1,
+            0
+          ],
+          "handleInOffset3D": [
+            0.04,
+            0.0,
+            0.05
+          ],
+          "handleOutOffset3D": [
+            -0.1,
+            0.0,
+            0.04
+          ],
+          "smooth": true
+        },
+        {
+          "rayOrigin": [
+            0.18,
+            3.0,
+            1.86
+          ],
+          "rayDir": [
+            0,
+            -1,
+            0
+          ],
+          "handleInOffset3D": [
+            0.09,
+            0.0,
+            -0.04
+          ],
+          "handleOutOffset3D": [
+            -0.02,
+            0.0,
+            0.04
+          ],
+          "smooth": true
+        }
+      ]
+    },
+    {
+      "op": "add_pen",
+      "name": "Side Yellow Aero Blade",
+      "closed": true,
+      "filled": true,
+      "hasStroke": true,
+      "use3DSpace": true,
+      "mirrorX": true,
+      "fillColor": [
+        232,
+        255,
+        24,
+        255
+      ],
+      "strokeColor": [
+        18,
+        22,
+        28,
+        255
+      ],
+      "widthPx": 12,
+      "worldWidth": 0.018,
+      "endTaper": 0,
+      "nodes": [
+        {
+          "rayOrigin": [
+            3.0,
+            0.28,
+            0.85
+          ],
+          "rayDir": [
+            -1,
+            0,
+            0
+          ],
+          "handleInOffset3D": [
+            0.0,
+            -0.03,
+            0.0
+          ],
+          "handleOutOffset3D": [
+            0.0,
+            0.01,
+            -0.18
+          ],
+          "smooth": true
+        },
+        {
+          "rayOrigin": [
+            3.0,
+            0.29,
+            0.12
+          ],
+          "rayDir": [
+            -1,
+            0,
+            0
+          ],
+          "handleInOffset3D": [
+            0.0,
+            -0.01,
+            0.18
+          ],
+          "handleOutOffset3D": [
+            0.0,
+            0.04,
+            -0.22
+          ],
+          "smooth": true
+        },
+        {
+          "rayOrigin": [
+            3.0,
+            0.48,
+            -0.68
+          ],
+          "rayDir": [
+            -1,
+            0,
+            0
+          ],
+          "handleInOffset3D": [
+            0.0,
+            -0.06,
+            0.14
+          ],
+          "handleOutOffset3D": [
+            0.0,
+            0.07,
+            -0.16
+          ],
+          "smooth": true
+        },
+        {
+          "rayOrigin": [
+            3.0,
+            0.68,
+            -1.35
+          ],
+          "rayDir": [
+            -1,
+            0,
+            0
+          ],
+          "handleInOffset3D": [
+            0.0,
+            -0.04,
+            0.12
+          ],
+          "handleOutOffset3D": [
+            0.0,
+            0.03,
+            -0.06
+          ],
+          "smooth": true
+        },
+        {
+          "rayOrigin": [
+            3.0,
+            0.72,
+            -1.1
+          ],
+          "rayDir": [
+            -1,
+            0,
+            0
+          ],
+          "handleInOffset3D": [
+            0.0,
+            -0.02,
+            -0.08
+          ],
+          "handleOutOffset3D": [
+            0.0,
+            -0.05,
+            0.14
+          ],
+          "smooth": true
+        },
+        {
+          "rayOrigin": [
+            3.0,
+            0.43,
+            0.12
+          ],
+          "rayDir": [
+            -1,
+            0,
+            0
+          ],
+          "handleInOffset3D": [
+            0.0,
+            0.04,
+            -0.2
+          ],
+          "handleOutOffset3D": [
+            0.0,
+            -0.01,
+            0.18
+          ],
+          "smooth": true
+        },
+        {
+          "rayOrigin": [
+            3.0,
+            0.41,
+            0.82
+          ],
+          "rayDir": [
+            -1,
+            0,
+            0
+          ],
+          "handleInOffset3D": [
+            0.0,
+            0.01,
+            -0.14
+          ],
+          "handleOutOffset3D": [
+            0.0,
+            -0.04,
+            0.02
+          ],
+          "smooth": true
+        }
+      ]
+    },
+    {
+      "op": "add_pen",
+      "name": "Side High-Vis Orange Flash",
+      "closed": true,
+      "filled": true,
+      "hasStroke": true,
+      "use3DSpace": true,
+      "mirrorX": true,
+      "fillColor": [
+        255,
+        102,
+        16,
+        255
+      ],
+      "strokeColor": [
+        20,
+        24,
+        30,
+        255
+      ],
+      "widthPx": 8,
+      "worldWidth": 0.014,
+      "endTaper": 0,
+      "nodes": [
+        {
+          "rayOrigin": [
+            3.0,
+            0.2,
+            0.72
+          ],
+          "rayDir": [
+            -1,
+            0,
+            0
+          ],
+          "handleInOffset3D": [
+            0.0,
+            -0.02,
+            0.0
+          ],
+          "handleOutOffset3D": [
+            0.0,
+            0.0,
+            -0.15
+          ],
+          "smooth": true
+        },
+        {
+          "rayOrigin": [
+            3.0,
+            0.21,
+            0.08
+          ],
+          "rayDir": [
+            -1,
+            0,
+            0
+          ],
+          "handleInOffset3D": [
+            0.0,
+            -0.01,
+            0.15
+          ],
+          "handleOutOffset3D": [
+            0.0,
+            0.02,
+            -0.14
+          ],
+          "smooth": true
+        },
+        {
+          "rayOrigin": [
+            3.0,
+            0.3,
+            -0.44
+          ],
+          "rayDir": [
+            -1,
+            0,
+            0
+          ],
+          "handleInOffset3D": [
+            0.0,
+            -0.03,
+            0.1
+          ],
+          "handleOutOffset3D": [
+            0.0,
+            0.03,
+            -0.05
+          ],
+          "smooth": true
+        },
+        {
+          "rayOrigin": [
+            3.0,
+            0.37,
+            -0.46
+          ],
+          "rayDir": [
+            -1,
+            0,
+            0
+          ],
+          "handleInOffset3D": [
+            0.0,
+            -0.01,
+            -0.04
+          ],
+          "handleOutOffset3D": [
+            0.0,
+            -0.02,
+            0.1
+          ],
+          "smooth": true
+        },
+        {
+          "rayOrigin": [
+            3.0,
+            0.27,
+            0.08
+          ],
+          "rayDir": [
+            -1,
+            0,
+            0
+          ],
+          "handleInOffset3D": [
+            0.0,
+            0.02,
+            -0.14
+          ],
+          "handleOutOffset3D": [
+            0.0,
+            0.0,
+            0.15
+          ],
+          "smooth": true
+        },
+        {
+          "rayOrigin": [
+            3.0,
+            0.26,
+            0.72
+          ],
+          "rayDir": [
+            -1,
+            0,
+            0
+          ],
+          "handleInOffset3D": [
+            0.0,
+            0.0,
+            -0.12
+          ],
+          "handleOutOffset3D": [
+            0.0,
+            -0.02,
+            0.0
+          ],
+          "smooth": true
+        }
+      ]
+    },
+    {
+      "op": "add_rect",
+      "name": "Door Rocker Caution Bar",
+      "fillColor": [
+        232,
+        255,
+        24,
+        255
+      ],
+      "strokeColor": [
+        18,
+        22,
+        28,
+        255
+      ],
+      "filled": true,
+      "hasStroke": true,
+      "mirrorX": true,
+      "cornerRadiusPx": 6.0,
+      "strokeWidthPx": 4.0,
+      "worldWidth": 0.72,
+      "worldHeight": 0.045,
+      "rotationDeg": -2.0,
+      "rayOrigin": [
+        3.0,
+        0.16,
+        0.12
+      ],
+      "rayDir": [
+        -1.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "op": "add_pen",
+      "name": "Rear Hazard Chevron Yellow",
+      "closed": true,
+      "filled": true,
+      "hasStroke": true,
+      "use3DSpace": true,
+      "mirrorX": true,
+      "fillColor": [
+        232,
+        255,
+        24,
+        255
+      ],
+      "strokeColor": [
+        18,
+        22,
+        28,
+        255
+      ],
+      "widthPx": 8,
+      "worldWidth": 0.014,
+      "endTaper": 0,
+      "nodes": [
+        {
+          "rayOrigin": [
+            2.2,
+            2.0,
+            -1.25
+          ],
+          "rayDir": [
+            -0.75,
+            -0.65,
+            0.0
+          ],
+          "handleInOffset3D": [
+            0,
+            0,
+            0
+          ],
+          "handleOutOffset3D": [
+            0,
+            0,
+            0
+          ],
+          "smooth": false
+        },
+        {
+          "rayOrigin": [
+            2.2,
+            2.0,
+            -1.42
+          ],
+          "rayDir": [
+            -0.75,
+            -0.65,
+            0.0
+          ],
+          "handleInOffset3D": [
+            0,
+            0,
+            0
+          ],
+          "handleOutOffset3D": [
+            0,
+            0,
+            0
+          ],
+          "smooth": false
+        },
+        {
+          "rayOrigin": [
+            2.2,
+            1.5,
+            -1.62
+          ],
+          "rayDir": [
+            -0.85,
+            -0.52,
+            0.0
+          ],
+          "handleInOffset3D": [
+            0,
+            0,
+            0
+          ],
+          "handleOutOffset3D": [
+            0,
+            0,
+            0
+          ],
+          "smooth": false
+        },
+        {
+          "rayOrigin": [
+            2.2,
+            1.5,
+            -1.45
+          ],
+          "rayDir": [
+            -0.85,
+            -0.52,
+            0.0
+          ],
+          "handleInOffset3D": [
+            0,
+            0,
+            0
+          ],
+          "handleOutOffset3D": [
+            0,
+            0,
+            0
+          ],
+          "smooth": false
+        }
+      ]
+    },
+    {
+      "op": "add_pen",
+      "name": "Rear Hazard Chevron Orange",
+      "closed": true,
+      "filled": true,
+      "hasStroke": true,
+      "use3DSpace": true,
+      "mirrorX": true,
+      "fillColor": [
+        255,
+        102,
+        16,
+        255
+      ],
+      "strokeColor": [
+        18,
+        22,
+        28,
+        255
+      ],
+      "widthPx": 8,
+      "worldWidth": 0.014,
+      "endTaper": 0,
+      "nodes": [
+        {
+          "rayOrigin": [
+            2.2,
+            1.9,
+            -1.48
+          ],
+          "rayDir": [
+            -0.75,
+            -0.65,
+            0.0
+          ],
+          "handleInOffset3D": [
+            0,
+            0,
+            0
+          ],
+          "handleOutOffset3D": [
+            0,
+            0,
+            0
+          ],
+          "smooth": false
+        },
+        {
+          "rayOrigin": [
+            2.2,
+            1.9,
+            -1.65
+          ],
+          "rayDir": [
+            -0.75,
+            -0.65,
+            0.0
+          ],
+          "handleInOffset3D": [
+            0,
+            0,
+            0
+          ],
+          "handleOutOffset3D": [
+            0,
+            0,
+            0
+          ],
+          "smooth": false
+        },
+        {
+          "rayOrigin": [
+            2.2,
+            1.4,
+            -1.84
+          ],
+          "rayDir": [
+            -0.85,
+            -0.52,
+            0.0
+          ],
+          "handleInOffset3D": [
+            0,
+            0,
+            0
+          ],
+          "handleOutOffset3D": [
+            0,
+            0,
+            0
+          ],
+          "smooth": false
+        },
+        {
+          "rayOrigin": [
+            2.2,
+            1.4,
+            -1.67
+          ],
+          "rayDir": [
+            -0.85,
+            -0.52,
+            0.0
+          ],
+          "handleInOffset3D": [
+            0,
+            0,
+            0
+          ],
+          "handleOutOffset3D": [
+            0,
+            0,
+            0
+          ],
+          "smooth": false
+        }
+      ]
+    },
+    {
+      "op": "add_pen",
+      "name": "Rear Bumper Yellow Accent",
+      "closed": true,
+      "filled": true,
+      "hasStroke": true,
+      "use3DSpace": true,
+      "mirrorX": true,
+      "fillColor": [
+        232,
+        255,
+        24,
+        255
+      ],
+      "strokeColor": [
+        18,
+        22,
+        28,
+        255
+      ],
+      "widthPx": 8,
+      "worldWidth": 0.012,
+      "endTaper": 0,
+      "nodes": [
+        {
+          "rayOrigin": [
+            0.36,
+            0.5,
+            -3.0
+          ],
+          "rayDir": [
+            0,
+            0,
+            1
+          ],
+          "handleInOffset3D": [
+            0,
+            0,
+            0
+          ],
+          "handleOutOffset3D": [
+            0.06,
+            -0.01,
+            0
+          ],
+          "smooth": true
+        },
+        {
+          "rayOrigin": [
+            0.74,
+            0.48,
+            -3.0
+          ],
+          "rayDir": [
+            0,
+            0,
+            1
+          ],
+          "handleInOffset3D": [
+            -0.06,
+            0.01,
+            0
+          ],
+          "handleOutOffset3D": [
+            0,
+            -0.03,
+            0
+          ],
+          "smooth": true
+        },
+        {
+          "rayOrigin": [
+            0.7,
+            0.36,
+            -3.0
+          ],
+          "rayDir": [
+            0,
+            0,
+            1
+          ],
+          "handleInOffset3D": [
+            0.02,
+            0.03,
+            0
+          ],
+          "handleOutOffset3D": [
+            -0.06,
+            0.01,
+            0
+          ],
+          "smooth": true
+        },
+        {
+          "rayOrigin": [
+            0.32,
+            0.4,
+            -3.0
+          ],
+          "rayDir": [
+            0,
+            0,
+            1
+          ],
+          "handleInOffset3D": [
+            0.06,
+            -0.01,
+            0
+          ],
+          "handleOutOffset3D": [
+            -0.01,
+            0.03,
+            0
+          ],
+          "smooth": true
+        }
+      ]
+    },
+    {
+      "op": "add_pen",
+      "name": "Side Tapered Pinstripe",
+      "closed": false,
+      "filled": false,
+      "hasStroke": true,
+      "use3DSpace": true,
+      "mirrorX": true,
+      "strokeColor": [
+        16,
+        185,
+        129,
+        255
+      ],
+      "outlineColor": [
+        232,
+        255,
+        24,
+        255
+      ],
+      "widthPx": 10,
+      "worldWidth": 0.02,
+      "outlineWidth": 3.5,
+      "endTaper": 0.68,
+      "nodes": [
+        {
+          "rayOrigin": [
+            0.84,
+            3.0,
+            0.85
+          ],
+          "rayDir": [
+            0,
+            -1,
+            0
+          ],
+          "handleInOffset3D": [
+            0,
+            0,
+            0.12
+          ],
+          "handleOutOffset3D": [
+            0,
+            -0.01,
+            -0.18
+          ],
+          "smooth": true
+        },
+        {
+          "rayOrigin": [
+            3.0,
+            0.66,
+            0.25
+          ],
+          "rayDir": [
+            -1,
+            0,
+            0
+          ],
+          "handleInOffset3D": [
+            0,
+            0.0,
+            0.18
+          ],
+          "handleOutOffset3D": [
+            0,
+            0.0,
+            -0.18
+          ],
+          "smooth": true
+        },
+        {
+          "rayOrigin": [
+            3.0,
+            0.67,
+            -0.45
+          ],
+          "rayDir": [
+            -1,
+            0,
+            0
+          ],
+          "handleInOffset3D": [
+            0,
+            0.0,
+            0.18
+          ],
+          "handleOutOffset3D": [
+            0,
+            0.02,
+            -0.18
+          ],
+          "smooth": true
+        },
+        {
+          "rayOrigin": [
+            3.0,
+            0.72,
+            -1.15
+          ],
+          "rayDir": [
+            -1,
+            0,
+            0
+          ],
+          "handleInOffset3D": [
+            0,
+            -0.02,
+            0.16
+          ],
+          "handleOutOffset3D": [
+            0,
+            -0.01,
+            -0.15
+          ],
+          "smooth": true
+        }
+      ]
+    },
+    {
+      "op": "add_pen",
+      "name": "Roof Aero Chevrons",
+      "closed": true,
+      "filled": true,
+      "hasStroke": true,
+      "use3DSpace": true,
+      "mirrorX": true,
+      "fillColor": [
+        24,
+        28,
+        34,
+        255
+      ],
+      "strokeColor": [
+        232,
+        255,
+        24,
+        255
+      ],
+      "widthPx": 8,
+      "worldWidth": 0.012,
+      "endTaper": 0,
+      "nodes": [
+        {
+          "rayOrigin": [
+            0.36,
+            3.0,
+            -0.14
+          ],
+          "rayDir": [
+            0,
+            -1,
+            0
+          ],
+          "handleInOffset3D": [
+            0,
+            0,
+            0
+          ],
+          "handleOutOffset3D": [
+            0,
+            0,
+            0
+          ],
+          "smooth": false
+        },
+        {
+          "rayOrigin": [
+            0.48,
+            3.0,
+            -0.18
+          ],
+          "rayDir": [
+            0,
+            -1,
+            0
+          ],
+          "handleInOffset3D": [
+            0,
+            0,
+            0
+          ],
+          "handleOutOffset3D": [
+            0,
+            0,
+            0
+          ],
+          "smooth": false
+        },
+        {
+          "rayOrigin": [
+            0.46,
+            3.0,
+            -0.54
+          ],
+          "rayDir": [
+            0,
+            -1,
+            0
+          ],
+          "handleInOffset3D": [
+            0,
+            0,
+            0
+          ],
+          "handleOutOffset3D": [
+            0,
+            0,
+            0
+          ],
+          "smooth": false
+        },
+        {
+          "rayOrigin": [
+            0.34,
+            3.0,
+            -0.5
+          ],
+          "rayDir": [
+            0,
+            -1,
+            0
+          ],
+          "handleInOffset3D": [
+            0,
+            0,
+            0
+          ],
+          "handleOutOffset3D": [
+            0,
+            0,
+            0
+          ],
+          "smooth": false
+        }
+      ]
+    },
+    {
+      "op": "add_layer",
+      "name": "Badges & Typography"
+    },
+    {
+      "op": "add_image",
+      "name": "Hood FIA Shield",
+      "path": "examples/safety_car/assets/fia_safety_badge.png",
+      "worldWidth": 0.24,
+      "rotationDeg": 0,
+      "tint": [
+        255,
+        255,
+        255,
+        255
+      ],
+      "mirrorMode": "None",
+      "rayOrigin": [
+        0.0,
+        3.0,
+        1.92
+      ],
+      "rayDir": [
+        0.0,
+        -1.0,
+        0.0
+      ]
+    },
+    {
+      "op": "add_text",
+      "name": "Hood SAFETY CAR Text",
+      "text": "SAFETY CAR",
+      "font": "ariblk",
+      "fontSizePx": 110,
+      "worldHeight": 0.11,
+      "outlineWidth": 4.5,
+      "fillColor": [
+        18,
+        22,
+        28,
+        255
+      ],
+      "outlineColor": [
+        232,
+        255,
+        24,
+        255
+      ],
+      "rotationDeg": 0,
+      "mirrorMode": "None",
+      "rayOrigin": [
+        0.0,
+        3.0,
+        1.24
+      ],
+      "rayDir": [
+        0.0,
+        -1.0,
+        0.0
+      ]
+    },
+    {
+      "op": "add_image",
+      "name": "Fender Marshal Badge",
+      "path": "examples/safety_car/assets/medical_flag_decal.png",
+      "worldWidth": 0.21,
+      "rotationDeg": 0,
+      "tint": [
+        255,
+        255,
+        255,
+        255
+      ],
+      "mirrorMode": "ReadableBothSides",
+      "rayOrigin": [
+        0.75,
+        3.0,
+        1.4
+      ],
+      "rayDir": [
+        0.0,
+        -1.0,
+        0.0
+      ]
+    },
+    {
+      "op": "add_image",
+      "name": "Door FIA Crest",
+      "path": "examples/safety_car/assets/fia_safety_badge.png",
+      "worldWidth": 0.26,
+      "rotationDeg": 0,
+      "tint": [
+        255,
+        255,
+        255,
+        255
+      ],
+      "mirrorMode": "ReadableBothSides",
+      "rayOrigin": [
+        3.0,
+        0.54,
+        0.58
+      ],
+      "rayDir": [
+        -1.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "op": "add_text",
+      "name": "Door SAFETY CAR Text",
+      "text": "SAFETY CAR",
+      "font": "ariblk",
+      "fontSizePx": 110,
+      "worldHeight": 0.14,
+      "outlineWidth": 5.0,
+      "fillColor": [
+        18,
+        22,
+        28,
+        255
+      ],
+      "outlineColor": [
+        248,
+        250,
+        252,
+        255
+      ],
+      "rotationDeg": 0,
+      "mirrorMode": "ReadableBothSides",
+      "rayOrigin": [
+        3.0,
+        0.54,
+        -0.08
+      ],
+      "rayDir": [
+        -1.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "op": "add_image",
+      "name": "Roof Lightbar Graphic",
+      "path": "examples/safety_car/assets/roof_lightbar_graphic.png",
+      "worldWidth": 0.84,
+      "rotationDeg": 0,
+      "tint": [
+        255,
+        255,
+        255,
+        255
+      ],
+      "mirrorMode": "None",
+      "rayOrigin": [
+        0.0,
+        3.0,
+        0.04
+      ],
+      "rayDir": [
+        0.0,
+        -1.0,
+        0.0
+      ]
+    },
+    {
+      "op": "add_text",
+      "name": "Roof SC 01 ID",
+      "text": "SC 01",
+      "font": "ariblk",
+      "fontSizePx": 120,
+      "worldHeight": 0.2,
+      "outlineWidth": 5.0,
+      "fillColor": [
+        232,
+        255,
+        24,
+        255
+      ],
+      "outlineColor": [
+        16,
+        20,
+        26,
+        255
+      ],
+      "rotationDeg": 0,
+      "mirrorMode": "None",
+      "rayOrigin": [
+        0.0,
+        3.0,
+        -0.34
+      ],
+      "rayDir": [
+        0.0,
+        -1.0,
+        0.0
+      ]
+    },
+    {
+      "op": "add_text",
+      "name": "Rear Wing SAFETY CAR Text",
+      "text": "SAFETY CAR",
+      "font": "ariblk",
+      "fontSizePx": 110,
+      "worldHeight": 0.14,
+      "outlineWidth": 4.5,
+      "fillColor": [
+        232,
+        255,
+        24,
+        255
+      ],
+      "outlineColor": [
+        14,
+        18,
+        24,
+        255
+      ],
+      "rotationDeg": 0,
+      "mirrorMode": "None",
+      "rayOrigin": [
+        0.0,
+        3.0,
+        -2.09
+      ],
+      "rayDir": [
+        0.0,
+        -1.0,
+        0.0
+      ]
+    },
+    {
+      "op": "transform_layer_2d",
+      "layer": "Door FIA Crest",
+      "deltaUv": [
+        0.0,
+        -0.004
+      ],
+      "scaleFactor": 1.0,
+      "deltaRotDeg": 0.0,
+      "keep3DIfHit": true
+    },
+    {
+      "op": "reorder_layer",
+      "layer": "AO / Panel Shading",
+      "toTop": true
+    },
+    {
+      "op": "save_project",
+      "path": "examples/safety_car/safety_car_v12.cr"
+    },
+    {
+      "op": "export_png",
+      "path": "examples/safety_car/SafetyCar_992_GT3R_4K.png",
+      "size": 4096
+    },
+    {
+      "op": "render_beauty",
+      "path": "examples/safety_car/render_front34.png",
+      "width": 1920,
+      "height": 1080,
+      "cameraPreset": "ThreeQuarterBeauty"
+    },
+    {
+      "op": "render_beauty",
+      "path": "examples/safety_car/render_side.png",
+      "width": 1920,
+      "height": 1080,
+      "cameraPreset": "Side"
+    },
+    {
+      "op": "render_beauty",
+      "path": "examples/safety_car/render_rear34.png",
+      "width": 1920,
+      "height": 1080,
+      "yawDeg": -142,
+      "pitchDeg": 16,
+      "dist": 5.3
+    },
+    {
+      "op": "render_beauty",
+      "path": "examples/safety_car/render_top.png",
+      "width": 1920,
+      "height": 1080,
+      "cameraPreset": "Top"
+    },
+    {
+      "op": "capture_ui",
+      "path": "examples/safety_car/coatroom_safety_car_ui.png",
+      "activeLayer": "Side Yellow Aero Blade",
+      "tool": "CurveBlade",
+      "cameraPreset": "ThreeQuarterBeauty"
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+COATROOM TERMS OF USE AND SOFTWARE LICENSE AGREEMENT
+Version 1.2 — Effective 2026
+
+Please read these Terms of Use carefully before installing or using Coatroom
+("the Software"), developed by Coatroom Studio. By installing, copying, or
+running Coatroom, you agree to the terms below.
+
+1. LICENSE GRANT
+Coatroom Studio grants you a non-exclusive, revocable, worldwide, royalty-free
+license to install and use Coatroom on Windows systems you own or control for
+personal, educational, or commercial 3D automotive livery design and rendering.
+
+You may not reverse-engineer, redistribute modified binaries as official
+Coatroom releases, or remove copyright and attribution notices included with
+the Software.
+
+2. YOUR CONTENT & OWNERSHIP
+You retain 100% ownership and all intellectual property rights to every project
+file (.cr / .lps), exported livery texture (.png), beauty render, and custom
+artwork you create with Coatroom. Coatroom Studio claims no rights, license,
+or interest in your creative output.
+
+You are solely responsible for ensuring you have the necessary rights to any
+third-party 3D vehicle models (.obj), logos, fonts, or reference textures that
+you import into Coatroom.
+
+3. PRIVACY & NETWORK BEHAVIOR
+- Offline by Default: Coatroom runs completely locally on your computer. It
+  does not collect telemetry, crash analytics, usage tracking, or account data,
+  and never uploads your livery files or 3D models.
+- Optional User-Initiated Updates: Coatroom checks for software updates only
+  when you explicitly click "Help > Check for Updates...". When triggered, it
+  makes a standard HTTPS GET request via Windows WinHTTP to fetch the release
+  manifest and verifies downloaded installer packages using SHA-256 checksums.
+
+4. WARRANTY DISCLAIMER ("AS IS")
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT.
+
+5. LIMITATION OF LIABILITY
+IN NO EVENT SHALL COATROOM STUDIO OR ITS CONTRIBUTORS BE LIABLE FOR ANY
+DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING LOSS OF DATA, LIVERY PROJECTS, OR BUSINESS INTERRUPTION) ARISING IN
+ANY WAY OUT OF THE USE OF OR INABILITY TO USE THE SOFTWARE, EVEN IF ADVISED OF
+THE POSSIBILITY OF SUCH DAMAGE.
+
+6. THIRD-PARTY SOFTWARE CREDITS & NOTICES
+Coatroom is built with and acknowledges the following technologies and open-
+source libraries:
+- Dear ImGui (MIT License) — Copyright (c) Omar Cornut
+- stb (stb_image, stb_image_write, stb_truetype — MIT / Public Domain) —
+  Sean Barrett
+- DirectX 11 (Direct3D 11 / DXGI / D3DCompiler) — Microsoft Corporation
+- Windows WinHTTP & Windows CNG BCrypt — Microsoft Corporation
+
+7. CONTACT
+For support, bug reports, or release verification, visit the official Coatroom
+repository or release page.

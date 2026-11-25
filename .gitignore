@@ -1,0 +1,33 @@
+# Build & packaging outputs
+build/
+dist/
+*.o
+*.obj
+*.res
+*.pdb
+*.exe
+*.zip
+
+# Temporary / scratch files
+.tmp*
+*.tmp
+temp/
+tmp/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE / CMake local files
+.vs/
+.vscode/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# Large generated project files (>100 MB, exceed GitHub file limit)
+*.cr
+*.lps
+
