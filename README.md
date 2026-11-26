@@ -1,10 +1,11 @@
-# Coatroom (`[Cr]`) v1.2
+# Coatroom (`[Cr]`) v1.3.0
 
 **Coatroom** is a native Windows C++20 / Direct3D 11 / Dear ImGui 3D automotive livery design and studio beauty-rendering application.
 
 ## Key Features
 
-- **Synchronized 3D Viewport & 4K 2D UV Canvas:** Paint and place vector graphics directly in 3D or on a `4096×4096` UV artboard with live PBR rendering, `X/Y/Z` camera gizmo, pixel rulers (`Ctrl+R`), and cyan snap guides.
+- **3D Car Mesh Support (`.obj` & `.fbx`):** Native Binary (`6100..7700+` incl. zlib) and ASCII `.fbx` loader alongside fast `.obj` / `.mtl` loading with automatic Y-up conversion and scale normalization.
+- **Synchronized 3D Viewport & 4K 2D UV Canvas:** Paint and place vector graphics directly in 3D or on a `4096×4096` UV artboard with live PBR rendering, `X/Y/Z` camera gizmo, pixel rulers (`Ctrl+R`), cyan snap guides, and mipmapped premultiplied-alpha anisotropic image downscaling.
 - **Vector & Raster Toolset:**
   - Cubic **Bezier Pen (`P`)** & **Direct Select** with smooth/corner toggles, right-click anchor removal, and live **Mirror** preview (`1.0 - uv.x`) across 2D and 3D
   - **Line (`\`)**, **Rectangle (`M`)**, **Type (`T`)**, **Image (`D`)**, **Brush (`B`)**, **Eraser (`E`)**, **Fill (`G`)**, and **Eyedropper (`I`)**
@@ -38,7 +39,7 @@ python scripts/gen_coatroom_ico.py --out resources/coatroom.ico
 Bundle `dist/CoatroomSetup.exe`, `dist/CoatroomUpdater.exe`, `dist/CoatroomUninstall.exe`, `dist/Coatroom.exe`, `dist/Coatroom-Portable-x64.zip`, and `dist/release-manifest.json` (with exact SHA-256 for both `CoatroomSetup.exe` and `Coatroom.exe`):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\package_release.ps1 -Owner IcecreamplayzYT -Repo Coatroom -Version 1.2.0
+powershell -ExecutionPolicy Bypass -File .\scripts\package_release.ps1 -Owner IcecreamplayzYT -Repo Coatroom -Version 1.3.0
 ```
 
 See [DISTRIBUTION.md](DISTRIBUTION.md) for the GitHub Releases upload checklist, `release-manifest.json` schema, Windows Defender WDSI submission workflow, and SmartScreen guidance.

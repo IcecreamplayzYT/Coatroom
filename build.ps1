@@ -48,6 +48,7 @@ $ImGuiSources = @(
 
 $AppSources = @(
     "src/mesh/obj_mesh.cpp",
+    "src/mesh/fbx_loader.cpp",
     "src/paint/canvas_engine.cpp",
     "src/render/d3d11_renderer.cpp",
     "src/ui/studio_theme.cpp",
@@ -130,90 +131,13 @@ if (Test-Path (Join-Path $Root "LICENSE_AND_TOU.txt")) {
 
 Write-Host "[OK] Built $OutExe ($([math]::Round((Get-Item $OutExe).Length / 1MB, 2)) MB)"
 
-# Build Installer, Uninstaller & Portable Distribution in dist/
-$DistDir = Join-Path $Root "dist"
-New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
-
-$SetupSrc = Join-Path $Root "installer\setup_main.cpp"
-$UninstSrc = Join-Path $Root "installer\uninstall_main.cpp"
-if ((Test-Path $SetupSrc) -and (Test-Path $UninstSrc)) {
-    $InstCFlags = @("c++", "-std=c++20", "-O2", "-DNOMINMAX", "-DWIN32_LEAN_AND_MEAN", "-DUNICODE", "-D_UNICODE")
-    $InstLibs = @("-luser32", "-lgdi32", "-lshell32", "-lole32", "-luuid", "-ladvapi32", "-ldwmapi", "-lcomctl32")
-
-    $SetupObj = Join-Path $ObjDir "setup_main.o"
-    if ($Force -or (-not (Test-Path $SetupObj)) -or ((Get-Item $SetupSrc).LastWriteTimeUtc -gt (Get-Item $SetupObj).LastWriteTimeUtc)) {
-        Write-Host "[CC] installer/setup_main.cpp"
-        & $Zig @InstCFlags -c $SetupSrc -o $SetupObj
-        if ($LASTEXITCODE -ne 0) { throw "Failed compiling setup_main.cpp" }
+# Build Self-Contained Installer, Updater, Uninstaller & Portable Zip via package_release.ps1
+$PackageScript = Join-Path $Root "scripts\package_release.ps1"
+if (Test-Path $PackageScript) {
+    & $PackageScript -Owner "IcecreamplayzYT" -Repo "Coatroom" -Version "1.3.0" -SkipAppBuild
+    if ($LASTEXITCODE -ne 0) { throw "package_release.ps1 failed!" }
+    $DistUpdater = Join-Path $Root "dist\CoatroomUpdater.exe"
+    if (Test-Path $DistUpdater) {
+        Copy-Item -Force $DistUpdater (Join-Path $BuildDir "CoatroomUpdater.exe")
     }
-    $SetupExe = Join-Path $DistDir "CoatroomSetup.exe"
-    Write-Host "[LINK] $SetupExe"
-    $SetupInputs = @($SetupObj)
-    if (Test-Path $RcObj) { $SetupInputs += $RcObj }
-    & $Zig c++ -std=c++20 -O2 "-Wl,--subsystem,windows" @SetupInputs -o $SetupExe @InstLibs
-    if ($LASTEXITCODE -ne 0) { throw "Failed linking CoatroomSetup.exe" }
-
-    $UninstObj = Join-Path $ObjDir "uninstall_main.o"
-    if ($Force -or (-not (Test-Path $UninstObj)) -or ((Get-Item $UninstSrc).LastWriteTimeUtc -gt (Get-Item $UninstObj).LastWriteTimeUtc)) {
-        Write-Host "[CC] installer/uninstall_main.cpp"
-        & $Zig @InstCFlags -c $UninstSrc -o $UninstObj
-        if ($LASTEXITCODE -ne 0) { throw "Failed compiling uninstall_main.cpp" }
-    }
-    $UninstExe = Join-Path $DistDir "CoatroomUninstall.exe"
-    Write-Host "[LINK] $UninstExe"
-    $UninstInputs = @($UninstObj)
-    if (Test-Path $RcObj) { $UninstInputs += $RcObj }
-    & $Zig c++ -std=c++20 -O2 "-Wl,--subsystem,windows" @UninstInputs -o $UninstExe @InstLibs
-    if ($LASTEXITCODE -ne 0) { throw "Failed linking CoatroomUninstall.exe" }
-
-    $UpdaterSrc = Join-Path $Root "installer\updater_main.cpp"
-    $UpdaterExe = Join-Path $DistDir "CoatroomUpdater.exe"
-    if (Test-Path $UpdaterSrc) {
-        $UpdaterObj = Join-Path $ObjDir "updater_main.o"
-        $OtaObj = Join-Path $ObjDir "ota_updater.o"
-        if ($Force -or (-not (Test-Path $UpdaterObj)) -or ((Get-Item $UpdaterSrc).LastWriteTimeUtc -gt (Get-Item $UpdaterObj).LastWriteTimeUtc) -or ($NewestHeaderUtc -and ($NewestHeaderUtc -gt (Get-Item $UpdaterObj).LastWriteTimeUtc))) {
-            Write-Host "[CC] installer/updater_main.cpp"
-            & $Zig @InstCFlags -Isrc -c $UpdaterSrc -o $UpdaterObj
-            if ($LASTEXITCODE -ne 0) { throw "Failed compiling updater_main.cpp" }
-        }
-        Write-Host "[LINK] $UpdaterExe"
-        $UpdInputs = @($UpdaterObj, $OtaObj)
-        if (Test-Path $RcObj) { $UpdInputs += $RcObj }
-        & $Zig c++ -std=c++20 -O2 "-Wl,--subsystem,windows" @UpdInputs -o $UpdaterExe @InstLibs "-lwinhttp" "-lbcrypt"
-        if ($LASTEXITCODE -ne 0) { throw "Failed linking CoatroomUpdater.exe" }
-        Copy-Item -Force $UpdaterExe (Join-Path $BuildDir "CoatroomUpdater.exe")
-    }
-
-    Copy-Item -Force $OutExe (Join-Path $DistDir "Coatroom.exe")
-    if (Test-Path (Join-Path $Root "LICENSE_AND_TOU.txt")) { Copy-Item -Force (Join-Path $Root "LICENSE_AND_TOU.txt") (Join-Path $DistDir "LICENSE_AND_TOU.txt") }
-    if (Test-Path (Join-Path $Root "README.md")) { Copy-Item -Force (Join-Path $Root "README.md") (Join-Path $DistDir "README.md") }
-    if (Test-Path (Join-Path $Root "resources\coatroom.ico")) {
-        $DistRes = Join-Path $DistDir "resources"
-        New-Item -ItemType Directory -Force -Path $DistRes | Out-Null
-        Copy-Item -Force (Join-Path $Root "resources\coatroom.ico") (Join-Path $DistRes "coatroom.ico")
-        Copy-Item -Force (Join-Path $Root "resources\coatroom.ico") (Join-Path $DistDir "coatroom.ico")
-    }
-
-    $PortableStage = Join-Path $DistDir "_portable_stage"
-    $PortableZip = Join-Path $DistDir "Coatroom-Portable-x64.zip"
-    if (Test-Path $PortableStage) { Remove-Item -Recurse -Force $PortableStage }
-    if (Test-Path $PortableZip) { Remove-Item -Force $PortableZip }
-    New-Item -ItemType Directory -Force -Path $PortableStage | Out-Null
-    Copy-Item -Force $OutExe (Join-Path $PortableStage "Coatroom.exe")
-    if (Test-Path $UpdaterExe) { Copy-Item -Force $UpdaterExe (Join-Path $PortableStage "CoatroomUpdater.exe") }
-    if (Test-Path (Join-Path $Root "LICENSE_AND_TOU.txt")) { Copy-Item -Force (Join-Path $Root "LICENSE_AND_TOU.txt") (Join-Path $PortableStage "LICENSE_AND_TOU.txt") }
-    if (Test-Path (Join-Path $Root "README.md")) { Copy-Item -Force (Join-Path $Root "README.md") (Join-Path $PortableStage "README.md") }
-    if (Test-Path (Join-Path $Root "resources\coatroom.ico")) {
-        New-Item -ItemType Directory -Force -Path (Join-Path $PortableStage "resources") | Out-Null
-        Copy-Item -Force (Join-Path $Root "resources\coatroom.ico") (Join-Path $PortableStage "resources\coatroom.ico")
-    }
-    $AssetsSrc = Join-Path $Root "examples\safety_car\assets"
-    if (Test-Path $AssetsSrc) {
-        $AssetsDst = Join-Path $PortableStage "examples\safety_car\assets"
-        New-Item -ItemType Directory -Force -Path $AssetsDst | Out-Null
-        Copy-Item -Force -Recurse (Join-Path $AssetsSrc "*") $AssetsDst
-    }
-    Compress-Archive -Path (Join-Path $PortableStage "*") -DestinationPath $PortableZip -CompressionLevel Optimal
-    Remove-Item -Recurse -Force $PortableStage
-    Write-Host "[OK] Packaged $SetupExe, $UninstExe, and $PortableZip"
 }

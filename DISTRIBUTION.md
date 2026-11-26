@@ -1,6 +1,6 @@
 # Coatroom Windows Release & Distribution Guide (Unsigned Build)
 
-This guide covers packaging, publishing, verifying, and maintaining unsigned Windows releases of **Coatroom** (`v1.2.0+`), including GitHub Releases, OTA `release-manifest.json`, Microsoft Defender false-positive mitigation, and SmartScreen guidance.
+This guide covers packaging, publishing, verifying, and maintaining unsigned Windows releases of **Coatroom** (`v1.3.0+`), including GitHub Releases, OTA `release-manifest.json`, Microsoft Defender false-positive mitigation, and SmartScreen guidance.
 
 ---
 
@@ -57,7 +57,7 @@ Coatroom ships in two clean, packer-free formats (no UPX, no self-extracting arc
 
 ## 3. GitHub Release & `release-manifest.json` Schema
 
-Coatroom's native WinHTTP OTA updater (`src/app/ota_updater.hpp/.cpp`) fetches `release-manifest.json` over **HTTPS** (`https://...` only; `http://127.0.0.1` is accepted exclusively for local tests) using `WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY` and `User-Agent: Coatroom/1.2.0`, then verifies downloaded binaries with **Windows CNG BCrypt SHA-256**.
+Coatroom's native WinHTTP OTA updater (`src/app/ota_updater.hpp/.cpp`) fetches `release-manifest.json` over **HTTPS** (`https://...` only; `http://127.0.0.1` is accepted exclusively for local tests) using `WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY` and `User-Agent: Coatroom/1.3.0`, then verifies downloaded binaries with **Windows CNG BCrypt SHA-256**.
 
 ### Schema
 
@@ -65,13 +65,13 @@ Publish `release-manifest.json` alongside your release assets on GitHub Releases
 
 ```json
 {
-  "version": "1.2.0",
-  "download_url": "https://github.com/IcecreamplayzYT/Coatroom/releases/download/v1.2.0/CoatroomSetup.exe",
+  "version": "1.3.0",
+  "download_url": "https://github.com/IcecreamplayzYT/Coatroom/releases/download/v1.3.0/CoatroomSetup.exe",
   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  "exe_url": "https://github.com/IcecreamplayzYT/Coatroom/releases/download/v1.2.0/Coatroom.exe",
+  "exe_url": "https://github.com/IcecreamplayzYT/Coatroom/releases/download/v1.3.0/Coatroom.exe",
   "exe_sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-  "release_notes": "Coatroom v1.2.0: Adobe squircle branding, .cr container projects, 200-step CoW undo, Pen/Rect UX polish, and native OTA updater.",
-  "published_at": "2026-11-25T12:00:00Z"
+  "release_notes": "Coatroom v1.3.0: Native Binary/ASCII .fbx support, mipmapped anisotropic image downscaling, and OTA updater.",
+  "published_at": "2026-11-26T12:00:00Z"
 }
 ```
 

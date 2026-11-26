@@ -26,7 +26,7 @@ namespace lps {
 
 namespace {
 
-constexpr wchar_t kUserAgent[] = L"Coatroom/1.2.0";
+constexpr wchar_t kUserAgent[] = L"Coatroom/1.3.0";
 constexpr size_t kMaxManifestBytes = 2 * 1024 * 1024;
 constexpr size_t kMaxInstallerBytes = 512 * 1024 * 1024;
 

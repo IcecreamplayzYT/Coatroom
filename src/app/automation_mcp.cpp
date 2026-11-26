@@ -954,11 +954,11 @@ bool dispatchCommand(AutomationHost& host, const std::string& op, const JsonValu
         return true;
     }
 
-    if (op == "load_obj") {
+    if (op == "load_obj" || op == "load_mesh") {
         std::string p = resolveInputPath(cmd.getStr("path"), baseDir);
         bool preserveCanvas = cmd.getBool("preserveCanvas", false);
         if (!host.loadObj || !host.loadObj(p, preserveCanvas)) {
-            outErr = "load_obj failed: " + p;
+            outErr = op + " failed: " + p;
             return false;
         }
         outResult.set("tris", JsonValue::makeNum(static_cast<double>(host.mesh->tris.size())));
@@ -2062,7 +2062,7 @@ int runMcpStdioServer(AutomationHost& host) {
             res.set("capabilities", std::move(caps));
             JsonValue sInfo = JsonValue::makeObject();
             sInfo.set("name", JsonValue::makeStr("coatroom"));
-            sInfo.set("version", JsonValue::makeStr("1.2.0"));
+            sInfo.set("version", JsonValue::makeStr("1.3.0"));
             res.set("serverInfo", std::move(sInfo));
             resp.set("result", std::move(res));
         } else if (method == "ping") {
@@ -2071,7 +2071,8 @@ int runMcpStdioServer(AutomationHost& host) {
             JsonValue tools = JsonValue::makeArray();
             tools.push(makeToolDef("execute_script", "Run a Coatroom JSON script file or commands array", nullptr));
             tools.push(makeToolDef("coatroom_new_project", "Create a new 4K/2K/1K Coatroom canvas", nullptr));
-            tools.push(makeToolDef("coatroom_load_obj", "Load a 3D car .obj mesh into Coatroom", "path"));
+            tools.push(makeToolDef("coatroom_load_obj", "Load a 3D car .obj or .fbx mesh into Coatroom", "path"));
+            tools.push(makeToolDef("coatroom_load_mesh", "Load a 3D car .obj or .fbx mesh into Coatroom", "path"));
             tools.push(makeToolDef("coatroom_load_ao", "Load an AO/panel shading Multiply map", "path"));
             tools.push(makeToolDef("coatroom_bake_ao", "Bake BVH ambient occlusion & panel crevice shading", nullptr));
             tools.push(makeToolDef("coatroom_set_base_color", "Set solid RGBA color of Base Paint / target layer", nullptr));

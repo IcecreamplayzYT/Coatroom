@@ -16,6 +16,7 @@ set(IMGUI_SOURCES
 
 set(APP_SOURCES
     src/mesh/obj_mesh.cpp
+    src/mesh/fbx_loader.cpp
     src/paint/canvas_engine.cpp
     src/render/d3d11_renderer.cpp
     src/ui/studio_theme.cpp

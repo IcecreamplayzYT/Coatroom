@@ -83,8 +83,8 @@ inline std::string saveFileDialog(HWND owner, const wchar_t* title, const wchar_
 inline std::string openObjDialog(HWND owner) {
     return openFileDialog(
         owner,
-        L"Open 3D Car Mesh (.obj)",
-        L"Wavefront OBJ (*.obj)\0*.obj\0All Files (*.*)\0*.*\0"
+        L"Open 3D Car Mesh (.obj / .fbx)",
+        L"3D Car Meshes (*.obj;*.fbx)\0*.obj;*.fbx\0Wavefront OBJ (*.obj)\0*.obj\0Autodesk FBX (*.fbx)\0*.fbx\0All Files (*.*)\0*.*\0"
     );
 }
 

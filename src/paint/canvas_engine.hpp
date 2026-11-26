@@ -118,11 +118,22 @@ struct TextLayerProps {
     }
 };
 
+struct MipChainRgba {
+    struct Level {
+        int w = 0;
+        int h = 0;
+        std::vector<uint8_t> premulRgba;
+    };
+    std::vector<Level> levels;
+    bool empty() const { return levels.empty(); }
+};
+
 struct DecalLayerProps {
     std::string sourcePath;
     int imgW = 0, imgH = 0;
     std::vector<uint8_t> imgRgba; // original imported decal bitmap (legacy/direct)
     std::shared_ptr<const std::vector<uint8_t>> imgRgbaShared; // copy-on-write shared bitmap
+    mutable std::shared_ptr<const MipChainRgba> mipChain;      // premultiplied mip pyramid
     Vec2 uvPos{0.5f, 0.5f};
     Vec2 uvScale{0.18f, 0.18f};
     Vec3 pos3D{0, 0, 0};
@@ -139,6 +150,7 @@ struct DecalLayerProps {
         if (imgRgbaShared && !imgRgbaShared->empty()) return *imgRgbaShared;
         return imgRgba;
     }
+    void ensureMipChain() const;
 };
 
 struct RulerStripeProps {
@@ -432,7 +444,7 @@ private:
                          float worldW, float worldH, float rotDeg, bool flipX, Color4u8 tint,
                          bool mirrorSecondPass, MirrorTextMode mirrorMode, DirtyRect* outDirty = nullptr,
                          Vec2* outPrimaryUvCenter = nullptr, Vec2* outPrimaryUvHalf = nullptr,
-                         bool* outHasPrimaryUvBox = nullptr);
+                         bool* outHasPrimaryUvBox = nullptr, const MipChainRgba* optMipChain = nullptr);
 
     uint32_t nextLayerId = 1;
     uint32_t nextItemId = 1;

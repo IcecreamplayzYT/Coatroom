@@ -30,7 +30,7 @@ namespace {
 constexpr wchar_t kWndClass[] = L"CoatroomUpdaterClass";
 constexpr char kDefaultManifestUrl[] =
     "https://github.com/IcecreamplayzYT/Coatroom/releases/latest/download/release-manifest.json";
-constexpr char kDefaultVersion[] = "1.2.0";
+constexpr char kDefaultVersion[] = "1.3.0";
 
 constexpr COLORREF kColBg = RGB(0x22, 0x22, 0x22);
 constexpr COLORREF kColSurface = RGB(0x1B, 0x1B, 0x1B);
@@ -274,11 +274,13 @@ bool downloadAndSwapExeInPlace(
     std::wstring& errOut) {
     const fs::path targetDir(opts.targetDir);
     const fs::path targetExe = targetDir / L"Coatroom.exe";
+    const fs::path dlPath = targetDir / L"Coatroom.exe.dl";
     const fs::path stagingExe = targetDir / L"Coatroom.exe.staging";
     const fs::path bakExe = targetDir / L"Coatroom.exe.bak";
 
     std::error_code ec;
     fs::create_directories(targetDir, ec);
+    DeleteFileW(dlPath.c_str());
     DeleteFileW(stagingExe.c_str());
 
     const bool hasDirectExe = !rel.exeUrl.empty() && !rel.exeSha256Hex.empty();
@@ -294,13 +296,13 @@ bool downloadAndSwapExeInPlace(
             errOut = L"Test payload file not found: " + srcFile.wstring();
             return false;
         }
-        if (!CopyFileW(srcFile.c_str(), stagingExe.c_str(), FALSE)) {
-            errOut = L"Failed staging test Coatroom.exe";
+        if (!CopyFileW(srcFile.c_str(), dlPath.c_str(), FALSE)) {
+            errOut = L"Failed staging test payload";
             return false;
         }
-        std::string actualSha = lps::computeFileSha256Hex(stagingExe);
+        std::string actualSha = lps::computeFileSha256Hex(dlPath);
         if (actualSha.empty() || actualSha != payloadSha) {
-            DeleteFileW(stagingExe.c_str());
+            DeleteFileW(dlPath.c_str());
             errOut = L"SHA-256 verification failed for staged test binary.";
             return false;
         }
@@ -311,13 +313,79 @@ bool downloadAndSwapExeInPlace(
         exeRel.sha256Hex = payloadSha;
 
         std::string dlErr;
-        if (!lps::downloadAndVerifyOtaInstaller(exeRel, stagingExe.wstring(), dlErr, [&](float p) {
+        if (!lps::downloadAndVerifyOtaInstaller(exeRel, dlPath.wstring(), dlErr, [&](float p) {
                 int pct = 10 + static_cast<int>(std::clamp(p, 0.0f, 1.0f) * 65.0f);
                 onStep(pct, L"Downloading and verifying SHA-256...");
             })) {
-            DeleteFileW(stagingExe.c_str());
+            DeleteFileW(dlPath.c_str());
             errOut = utf8ToWide(dlErr);
             return false;
+        }
+    }
+
+    // If downloaded file is a self-contained CoatroomSetup.exe (contains RCDATA 102), extract Coatroom.exe
+    {
+        HMODULE hMod = LoadLibraryExW(dlPath.c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+        bool extractedFromSetup = false;
+        if (hMod) {
+            HRSRC hExeRes = FindResourceW(hMod, MAKEINTRESOURCEW(102), RT_RCDATA);
+            if (hExeRes) {
+                HGLOBAL hData = LoadResource(hMod, hExeRes);
+                DWORD sz = SizeofResource(hMod, hExeRes);
+                const void* ptr = hData ? LockResource(hData) : nullptr;
+                if (!ptr || sz == 0) {
+                    FreeLibrary(hMod);
+                    DeleteFileW(dlPath.c_str());
+                    errOut = L"Failed locking embedded Coatroom.exe resource in downloaded setup.";
+                    return false;
+                }
+                HANDLE hOut = CreateFileW(stagingExe.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+                if (hOut == INVALID_HANDLE_VALUE) {
+                    FreeLibrary(hMod);
+                    DeleteFileW(dlPath.c_str());
+                    errOut = L"Failed creating Coatroom.exe.staging";
+                    return false;
+                }
+                DWORD written = 0;
+                BOOL okW = WriteFile(hOut, ptr, sz, &written, nullptr);
+                CloseHandle(hOut);
+                if (!okW || written != sz) {
+                    FreeLibrary(hMod);
+                    DeleteFileW(dlPath.c_str());
+                    DeleteFileW(stagingExe.c_str());
+                    errOut = L"Failed writing extracted Coatroom.exe.staging";
+                    return false;
+                }
+                extractedFromSetup = true;
+
+                // Optionally refresh CoatroomUninstall.exe from RCDATA 103 if present
+                HRSRC hUninstRes = FindResourceW(hMod, MAKEINTRESOURCEW(103), RT_RCDATA);
+                if (hUninstRes) {
+                    HGLOBAL hUData = LoadResource(hMod, hUninstRes);
+                    DWORD uSz = SizeofResource(hMod, hUninstRes);
+                    const void* uPtr = hUData ? LockResource(hUData) : nullptr;
+                    if (uPtr && uSz > 0) {
+                        fs::path uninstPath = targetDir / L"CoatroomUninstall.exe";
+                        HANDLE hUOut = CreateFileW(uninstPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+                        if (hUOut != INVALID_HANDLE_VALUE) {
+                            DWORD uW = 0;
+                            WriteFile(hUOut, uPtr, uSz, &uW, nullptr);
+                            CloseHandle(hUOut);
+                        }
+                    }
+                }
+            }
+            FreeLibrary(hMod);
+        }
+
+        if (extractedFromSetup) {
+            DeleteFileW(dlPath.c_str());
+        } else {
+            if (!MoveFileExW(dlPath.c_str(), stagingExe.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+                DeleteFileW(dlPath.c_str());
+                errOut = L"Failed moving verified download to Coatroom.exe.staging";
+                return false;
+            }
         }
     }
 

@@ -628,11 +628,197 @@ void rasterizeRect2DToBuffer(uint8_t* dstRgba, int bufW, int bufH,
     }
 }
 
-void drawText2DToLayer(Layer& l, int width, int height, const std::vector<uint8_t>& bmp, int bw, int bh,
+std::shared_ptr<MipChainRgba> buildMipChainPremul(const uint8_t* rgba, int w, int h) {
+    auto chain = std::make_shared<MipChainRgba>();
+    if (!rgba || w <= 0 || h <= 0) return chain;
+
+    MipChainRgba::Level lvl0;
+    lvl0.w = w;
+    lvl0.h = h;
+    lvl0.premulRgba.resize(static_cast<size_t>(w) * h * 4);
+    for (size_t i = 0; i < static_cast<size_t>(w) * h; ++i) {
+        uint32_t a = rgba[i * 4 + 3];
+        lvl0.premulRgba[i * 4 + 0] = static_cast<uint8_t>((rgba[i * 4 + 0] * a + 127u) / 255u);
+        lvl0.premulRgba[i * 4 + 1] = static_cast<uint8_t>((rgba[i * 4 + 1] * a + 127u) / 255u);
+        lvl0.premulRgba[i * 4 + 2] = static_cast<uint8_t>((rgba[i * 4 + 2] * a + 127u) / 255u);
+        lvl0.premulRgba[i * 4 + 3] = static_cast<uint8_t>(a);
+    }
+    chain->levels.push_back(std::move(lvl0));
+
+    while (chain->levels.back().w > 1 || chain->levels.back().h > 1) {
+        const MipChainRgba::Level& prev = chain->levels.back();
+        int nw = std::max(1, prev.w / 2);
+        int nh = std::max(1, prev.h / 2);
+        MipChainRgba::Level next;
+        next.w = nw;
+        next.h = nh;
+        next.premulRgba.resize(static_cast<size_t>(nw) * nh * 4);
+
+        for (int y = 0; y < nh; ++y) {
+            int sy0 = y * 2;
+            int sy1 = std::min(sy0 + 1, prev.h - 1);
+            int sy2 = (prev.h > 2 * nh && y == nh - 1) ? (prev.h - 1) : sy1;
+            for (int x = 0; x < nw; ++x) {
+                int sx0 = x * 2;
+                int sx1 = std::min(sx0 + 1, prev.w - 1);
+                int sx2 = (prev.w > 2 * nw && x == nw - 1) ? (prev.w - 1) : sx1;
+                uint32_t sumR = 0, sumG = 0, sumB = 0, sumA = 0, cnt = 0;
+                int ys[3] = {sy0, sy1, sy2};
+                int nyTaps = (sy2 != sy1) ? 3 : 2;
+                int xs[3] = {sx0, sx1, sx2};
+                int nxTaps = (sx2 != sx1) ? 3 : 2;
+                for (int iy = 0; iy < nyTaps; ++iy) {
+                    for (int ix = 0; ix < nxTaps; ++ix) {
+                        size_t si = (static_cast<size_t>(ys[iy]) * prev.w + xs[ix]) * 4;
+                        sumR += prev.premulRgba[si + 0];
+                        sumG += prev.premulRgba[si + 1];
+                        sumB += prev.premulRgba[si + 2];
+                        sumA += prev.premulRgba[si + 3];
+                        ++cnt;
+                    }
+                }
+                size_t di = (static_cast<size_t>(y) * nw + x) * 4;
+                next.premulRgba[di + 0] = static_cast<uint8_t>((sumR + cnt / 2) / cnt);
+                next.premulRgba[di + 1] = static_cast<uint8_t>((sumG + cnt / 2) / cnt);
+                next.premulRgba[di + 2] = static_cast<uint8_t>((sumB + cnt / 2) / cnt);
+                next.premulRgba[di + 3] = static_cast<uint8_t>((sumA + cnt / 2) / cnt);
+            }
+        }
+        chain->levels.push_back(std::move(next));
+    }
+    return chain;
+}
+
+inline void samplePremulBilinear(const MipChainRgba::Level& lvl, float tx, float ty,
+                                 float& pr, float& pg, float& pb, float& pa) {
+    float fx = std::clamp(tx * lvl.w - 0.5f, 0.0f, static_cast<float>(std::max(0, lvl.w - 1)));
+    float fy = std::clamp(ty * lvl.h - 0.5f, 0.0f, static_cast<float>(std::max(0, lvl.h - 1)));
+    int x0 = static_cast<int>(fx), y0 = static_cast<int>(fy);
+    int x1 = std::min(x0 + 1, lvl.w - 1), y1 = std::min(y0 + 1, lvl.h - 1);
+    float wx = fx - x0, wy = fy - y0;
+    const uint8_t* p = lvl.premulRgba.data();
+    auto at = [&](int x, int y, int c) -> float {
+        return static_cast<float>(p[(static_cast<size_t>(y) * lvl.w + x) * 4 + c]);
+    };
+    float w00 = (1.0f - wx) * (1.0f - wy), w10 = wx * (1.0f - wy);
+    float w01 = (1.0f - wx) * wy, w11 = wx * wy;
+    pr = w00 * at(x0,y0,0) + w10 * at(x1,y0,0) + w01 * at(x0,y1,0) + w11 * at(x1,y1,0);
+    pg = w00 * at(x0,y0,1) + w10 * at(x1,y0,1) + w01 * at(x0,y1,1) + w11 * at(x1,y1,1);
+    pb = w00 * at(x0,y0,2) + w10 * at(x1,y0,2) + w01 * at(x0,y1,2) + w11 * at(x1,y1,2);
+    pa = (w00 * at(x0,y0,3) + w10 * at(x1,y0,3) + w01 * at(x0,y1,3) + w11 * at(x1,y1,3)) / 255.0f;
+}
+
+inline void catmullWeights(float t, float w[4]) {
+    float t2 = t * t, t3 = t2 * t;
+    w[0] = -0.5f * t + t2 - 0.5f * t3;
+    w[1] = 1.0f - 2.5f * t2 + 1.5f * t3;
+    w[2] = 0.5f * t + 2.0f * t2 - 1.5f * t3;
+    w[3] = -0.5f * t2 + 0.5f * t3;
+}
+
+inline void samplePremulBicubic(const MipChainRgba::Level& lvl, float tx, float ty,
+                                float& pr, float& pg, float& pb, float& pa) {
+    if (lvl.w < 4 || lvl.h < 4) {
+        samplePremulBilinear(lvl, tx, ty, pr, pg, pb, pa);
+        return;
+    }
+    float fx = tx * lvl.w - 0.5f;
+    float fy = ty * lvl.h - 0.5f;
+    int ix = static_cast<int>(std::floor(fx));
+    int iy = static_cast<int>(std::floor(fy));
+    float wx[4], wy[4];
+    catmullWeights(fx - ix, wx);
+    catmullWeights(fy - iy, wy);
+    const uint8_t* p = lvl.premulRgba.data();
+
+    pr = pg = pb = pa = 0.0f;
+    for (int j = 0; j < 4; ++j) {
+        int sy = std::clamp(iy - 1 + j, 0, lvl.h - 1);
+        float wj = wy[j];
+        for (int i = 0; i < 4; ++i) {
+            int sx = std::clamp(ix - 1 + i, 0, lvl.w - 1);
+            float w = wx[i] * wj;
+            size_t idx = (static_cast<size_t>(sy) * lvl.w + sx) * 4;
+            pr += p[idx + 0] * w;
+            pg += p[idx + 1] * w;
+            pb += p[idx + 2] * w;
+            pa += p[idx + 3] * w;
+        }
+    }
+    pa = std::clamp(pa / 255.0f, 0.0f, 1.0f);
+    float maxPremul = pa * 255.0f;
+    pr = std::clamp(pr, 0.0f, maxPremul);
+    pg = std::clamp(pg, 0.0f, maxPremul);
+    pb = std::clamp(pb, 0.0f, maxPremul);
+}
+
+inline void sampleMipAniso(const MipChainRgba& chain, float tx, float ty,
+                           float dUdx, float dVdx, float dUdy, float dVdy,
+                           float& outR, float& outG, float& outB, float& outA) {
+    if (chain.levels.empty() || tx < 0.0f || tx > 1.0f || ty < 0.0f || ty > 1.0f) {
+        outR = outG = outB = outA = 0.0f;
+        return;
+    }
+    const MipChainRgba::Level& lvl0 = chain.levels[0];
+    float ux = dUdx * lvl0.w, vx = dVdx * lvl0.h;
+    float uy = dUdy * lvl0.w, vy = dVdy * lvl0.h;
+    float lenX = std::hypot(ux, vx);
+    float lenY = std::hypot(uy, vy);
+    float majorLen = std::max(lenX, lenY);
+    float minorLen = std::min(lenX, lenY);
+    float anisoRatio = std::clamp(majorLen / std::max(minorLen, 1e-4f), 1.0f, 4.0f);
+    int numTaps = (majorLen <= 1.0f) ? 1 : std::clamp(static_cast<int>(std::ceil(anisoRatio)), 1, 4);
+    float lod = std::log2(std::max(1e-4f, majorLen / static_cast<float>(numTaps)));
+
+    float pr = 0.0f, pg = 0.0f, pb = 0.0f, pa = 0.0f;
+    if (lod <= 0.0f) {
+        samplePremulBicubic(lvl0, tx, ty, pr, pg, pb, pa);
+    } else {
+        int maxLvl = static_cast<int>(chain.levels.size()) - 1;
+        int lvlA = std::clamp(static_cast<int>(std::floor(lod)), 0, maxLvl);
+        int lvlB = std::min(lvlA + 1, maxLvl);
+        float frac = std::clamp(lod - lvlA, 0.0f, 1.0f);
+        float majU = (lenX >= lenY) ? dUdx : dUdy;
+        float majV = (lenX >= lenY) ? dVdx : dVdy;
+
+        for (int k = 0; k < numTaps; ++k) {
+            float off = (numTaps == 1) ? 0.0f : (static_cast<float>(k) / (numTaps - 1) - 0.5f);
+            float su = std::clamp(tx + majU * off, 0.0f, 1.0f);
+            float sv = std::clamp(ty + majV * off, 0.0f, 1.0f);
+            float r0, g0, b0, a0, r1, g1, b1, a1;
+            samplePremulBilinear(chain.levels[lvlA], su, sv, r0, g0, b0, a0);
+            if (lvlB != lvlA && frac > 1e-3f) {
+                samplePremulBilinear(chain.levels[lvlB], su, sv, r1, g1, b1, a1);
+                pr += r0 * (1.0f - frac) + r1 * frac;
+                pg += g0 * (1.0f - frac) + g1 * frac;
+                pb += b0 * (1.0f - frac) + b1 * frac;
+                pa += a0 * (1.0f - frac) + a1 * frac;
+            } else {
+                pr += r0; pg += g0; pb += b0; pa += a0;
+            }
+        }
+        float invT = 1.0f / numTaps;
+        pr *= invT; pg *= invT; pb *= invT; pa *= invT;
+    }
+
+    if (pa <= 1e-4f) {
+        outR = outG = outB = outA = 0.0f;
+        return;
+    }
+    outR = std::clamp(pr / pa, 0.0f, 255.0f);
+    outG = std::clamp(pg / pa, 0.0f, 255.0f);
+    outB = std::clamp(pb / pa, 0.0f, 255.0f);
+    outA = std::clamp(pa, 0.0f, 1.0f);
+}
+
+void drawText2DToLayer(Layer& l, int width, int height, const MipChainRgba& bmpMip,
                        Vec2 uvPos, float drawW, float drawH, float rotDeg, bool flipX, DirtyRect* outDirty) {
+    if (bmpMip.empty() || drawW <= 0.5f || drawH <= 0.5f) return;
     float cx = uvPos.x * width, cy = uvPos.y * height;
     float rad = rotDeg * kDeg2Rad;
     float cs = std::cos(rad), sn = std::sin(rad);
+    float dUdx = (flipX ? -cs : cs) / drawW, dVdx = -sn / drawH;
+    float dUdy = (flipX ? -sn : sn) / drawW, dVdy = cs / drawH;
     int rB = static_cast<int>(std::ceil(0.6f * std::hypot(drawW, drawH))) + 2;
     int x0 = std::clamp(static_cast<int>(cx) - rB, 0, width - 1);
     int x1 = std::clamp(static_cast<int>(cx) + rB, 0, width - 1);
@@ -646,7 +832,7 @@ void drawText2DToLayer(Layer& l, int width, int height, const std::vector<uint8_
             if (flipX) lx = 1.0f - lx;
             if (lx < 0.0f || lx > 1.0f || ly < 0.0f || ly > 1.0f) continue;
             float sr, sg, sb, sa;
-            sampleRgbaBilinear(bmp.data(), bw, bh, lx, ly, sr, sg, sb, sa);
+            sampleMipAniso(bmpMip, lx, ly, dUdx, dVdx, dUdy, dVdy, sr, sg, sb, sa);
             if (sa <= 1e-4f) continue;
             size_t o = (static_cast<size_t>(py) * width + px) * 4;
             paintOverRaw(&l.rgba[o], u8clamp(sr), u8clamp(sg), u8clamp(sb), sa, false);
@@ -655,13 +841,16 @@ void drawText2DToLayer(Layer& l, int width, int height, const std::vector<uint8_
     }
 }
 
-void drawDecal2DToLayer(Layer& l, int width, int height, const std::vector<uint8_t>& imgPix, int imgW, int imgH,
+void drawDecal2DToLayer(Layer& l, int width, int height, const MipChainRgba& mip,
                         Vec2 uvPos, Vec2 uvScale, float rotDeg, bool flipX, Color4u8 tint, DirtyRect* outDirty) {
+    if (mip.empty()) return;
     float cx = uvPos.x * width, cy = uvPos.y * height;
     float drawW = uvScale.x * width, drawH = uvScale.y * height;
     if (drawW <= 0.5f || drawH <= 0.5f) return;
     float rad = rotDeg * kDeg2Rad;
     float cs = std::cos(rad), sn = std::sin(rad);
+    float dUdx = (flipX ? -cs : cs) / drawW, dVdx = -sn / drawH;
+    float dUdy = (flipX ? -sn : sn) / drawW, dVdy = cs / drawH;
     int rB = static_cast<int>(std::ceil(0.6f * std::hypot(drawW, drawH))) + 2;
     int x0 = std::clamp(static_cast<int>(cx) - rB, 0, width - 1);
     int x1 = std::clamp(static_cast<int>(cx) + rB, 0, width - 1);
@@ -675,7 +864,7 @@ void drawDecal2DToLayer(Layer& l, int width, int height, const std::vector<uint8
             if (flipX) lx = 1.0f - lx;
             if (lx < 0.0f || lx > 1.0f || ly < 0.0f || ly > 1.0f) continue;
             float sr, sg, sb, sa;
-            sampleRgbaBilinear(imgPix.data(), imgW, imgH, lx, ly, sr, sg, sb, sa);
+            sampleMipAniso(mip, lx, ly, dUdx, dVdx, dUdy, dVdy, sr, sg, sb, sa);
             float effA = sa * (tint.a / 255.0f);
             if (effA <= 1e-4f) continue;
             size_t o = (static_cast<size_t>(py) * width + px) * 4;
@@ -699,6 +888,19 @@ void copyRectBytes(std::vector<uint8_t>& dst, const std::vector<uint8_t>& src,
 }
 
 } // namespace
+
+void DecalLayerProps::ensureMipChain() const {
+    const auto& pix = imagePixels();
+    if (pix.empty() || imgW <= 0 || imgH <= 0) {
+        mipChain.reset();
+        return;
+    }
+    if (mipChain && !mipChain->levels.empty() &&
+        mipChain->levels[0].w == imgW && mipChain->levels[0].h == imgH) {
+        return;
+    }
+    mipChain = buildMipChainPremul(pix.data(), imgW, imgH);
+}
 
 std::vector<uint8_t> renderBrandLogoRgba(int sizePx) {
     if (sizePx <= 0) return {};
@@ -2749,8 +2951,15 @@ void CanvasEngine::projectBitmap3D(Layer& layer, const ObjMesh& mesh, const uint
                                    const Vec3& centerPos, const Vec3& centerNrm, const Vec3& rightHint,
                                    float worldW, float worldH, float rotDeg, bool flipX, Color4u8 tint,
                                    bool mirrorSecondPass, MirrorTextMode mirrorMode, DirtyRect* outDirty,
-                                   Vec2* outPrimaryUvCenter, Vec2* outPrimaryUvHalf, bool* outHasPrimaryUvBox) {
+                                   Vec2* outPrimaryUvCenter, Vec2* outPrimaryUvHalf, bool* outHasPrimaryUvBox,
+                                   const MipChainRgba* optMipChain) {
     cachedMesh = &mesh;
+    std::shared_ptr<MipChainRgba> localMip;
+    const MipChainRgba* mipPtr = optMipChain;
+    if (!mipPtr || mipPtr->empty()) {
+        localMip = buildMipChainPremul(srcRgba, srcW, srcH);
+        mipPtr = localMip.get();
+    }
     float halfDiag = 0.55f * std::sqrt(worldW * worldW + worldH * worldH);
     float maxD = std::max(halfDiag, 0.1f);
     std::vector<int32_t> candTris;
@@ -2795,6 +3004,19 @@ void CanvasEngine::projectBitmap3D(Layer& layer, const ObjMesh& mesh, const uint
             float area = (u1.x - u0.x) * (u2.y - u0.y) - (u1.y - u0.y) * (u2.x - u0.x);
             if (std::fabs(area) < 1e-4f) continue;
 
+            float dw0_dx = (u1.y - u2.y) / area;
+            float duu_dx = (u2.y - u0.y) / area;
+            float dvv_dx = -dw0_dx - duu_dx;
+            float dw0_dy = (u2.x - u1.x) / area;
+            float duu_dy = (u0.x - u2.x) / area;
+            float dvv_dy = -dw0_dy - duu_dy;
+            Vec3 dp3_dx = a * dw0_dx + b * duu_dx + c * dvv_dx;
+            Vec3 dp3_dy = a * dw0_dy + b * duu_dy + c * dvv_dy;
+            float dUdx = (flipX ? -1.0f : 1.0f) * dot(dp3_dx, T_rot) / worldW;
+            float dVdx = dot(dp3_dx, B_rot) / worldH;
+            float dUdy = (flipX ? -1.0f : 1.0f) * dot(dp3_dy, T_rot) / worldW;
+            float dVdy = dot(dp3_dy, B_rot) / worldH;
+
             int ux0 = std::clamp(static_cast<int>(std::floor(std::min({u0.x, u1.x, u2.x}))), 0, width - 1);
             int ux1 = std::clamp(static_cast<int>(std::ceil(std::max({u0.x, u1.x, u2.x}))),  0, width - 1);
             int uy0 = std::clamp(static_cast<int>(std::floor(std::min({u0.y, u1.y, u2.y}))), 0, height - 1);
@@ -2818,7 +3040,7 @@ void CanvasEngine::projectBitmap3D(Layer& layer, const ObjMesh& mesh, const uint
                     if (tx < 0.0f || tx > 1.0f || ty < 0.0f || ty > 1.0f) continue;
 
                     float sr, sg, sb, sa;
-                    sampleRgbaBilinear(srcRgba, srcW, srcH, tx, ty, sr, sg, sb, sa);
+                    sampleMipAniso(*mipPtr, tx, ty, dUdx, dVdx, dUdy, dVdy, sr, sg, sb, sa);
                     if (sa <= 1e-4f) continue;
                     size_t dstIdx = (static_cast<size_t>(py) * width + px) * 4;
                     paintOverRaw(&layer.rgba[dstIdx],
@@ -2922,6 +3144,7 @@ void CanvasEngine::rasterizeLayer(int layerIdx, const ObjMesh* mesh) {
             tp.lastCharBoxesUv.clear();
             return;
         }
+        auto bmpMip = buildMipChainPremul(bmp.data(), bw, bh);
         tp.lastCharBoxesUv.resize(normBoxes.size());
         if (tp.anchoredIn3D && mesh && mesh->loaded) {
             float wH = std::max(0.03f, tp.worldHeight);
@@ -2932,7 +3155,7 @@ void CanvasEngine::rasterizeLayer(int layerIdx, const ObjMesh* mesh) {
             projectBitmap3D(l, *mesh, bmp.data(), bw, bh,
                             tp.pos3D, tp.nrm3D, tp.right3D,
                             wW, wH, tp.rotationDeg, false, {255, 255, 255, 255},
-                            doMirror, mm, &newDirty, pCenter, pHalf, pHasBox);
+                            doMirror, mm, &newDirty, pCenter, pHalf, pHasBox, bmpMip.get());
             syncFn();
             Vec2 cUv = pCenter ? *pCenter : tp.uvPos;
             Vec2 hUv = (pHalf && pHasBox && *pHasBox) ? *pHalf : Vec2{0.08f, 0.04f};
@@ -2948,10 +3171,10 @@ void CanvasEngine::rasterizeLayer(int layerIdx, const ObjMesh* mesh) {
             }
         } else {
             float drawW = bw * uvScale, drawH = bh * uvScale;
-            drawText2DToLayer(l, width, height, bmp, bw, bh, tp.uvPos, drawW, drawH, tp.rotationDeg, false, &newDirty);
+            drawText2DToLayer(l, width, height, *bmpMip, tp.uvPos, drawW, drawH, tp.rotationDeg, false, &newDirty);
             if (tp.mirrorX) {
                 bool flipX = (tp.mirrorMode == MirrorTextMode::TrueFlip);
-                drawText2DToLayer(l, width, height, bmp, bw, bh, {1.0f - tp.uvPos.x, tp.uvPos.y},
+                drawText2DToLayer(l, width, height, *bmpMip, {1.0f - tp.uvPos.x, tp.uvPos.y},
                                   drawW, drawH, -tp.rotationDeg, flipX, &newDirty);
             }
             float uW = drawW / std::max(1, width);
@@ -2979,6 +3202,8 @@ void CanvasEngine::rasterizeLayer(int layerIdx, const ObjMesh* mesh) {
     auto rasterizeDecal = [&](DecalLayerProps& dp, Vec2* pCenter, Vec2* pHalf, bool* pHasBox, auto&& syncFn) {
         const auto& imgPix = dp.imagePixels();
         if (imgPix.empty() || dp.imgW <= 0 || dp.imgH <= 0) return;
+        dp.ensureMipChain();
+        if (!dp.mipChain || dp.mipChain->empty()) return;
         if (dp.anchoredIn3D && mesh && mesh->loaded) {
             float wW = std::max(0.05f, dp.worldWidth);
             float wH = wW * (static_cast<float>(dp.imgH) / std::max(1, dp.imgW));
@@ -2988,14 +3213,14 @@ void CanvasEngine::rasterizeLayer(int layerIdx, const ObjMesh* mesh) {
             projectBitmap3D(l, *mesh, imgPix.data(), dp.imgW, dp.imgH,
                             dp.pos3D, dp.nrm3D, dp.right3D,
                             wW, wH, dp.rotationDeg, false, dp.tint,
-                            doMirror, mm, &newDirty, pCenter, pHalf, pHasBox);
+                            doMirror, mm, &newDirty, pCenter, pHalf, pHasBox, dp.mipChain.get());
             syncFn();
         } else {
-            drawDecal2DToLayer(l, width, height, imgPix, dp.imgW, dp.imgH,
+            drawDecal2DToLayer(l, width, height, *dp.mipChain,
                                dp.uvPos, dp.uvScale, dp.rotationDeg, false, dp.tint, &newDirty);
             if (dp.mirrorX) {
                 bool flipX = (dp.mirrorMode == MirrorTextMode::TrueFlip);
-                drawDecal2DToLayer(l, width, height, imgPix, dp.imgW, dp.imgH,
+                drawDecal2DToLayer(l, width, height, *dp.mipChain,
                                    {1.0f - dp.uvPos.x, dp.uvPos.y}, dp.uvScale, -dp.rotationDeg, flipX, dp.tint, &newDirty);
             }
         }

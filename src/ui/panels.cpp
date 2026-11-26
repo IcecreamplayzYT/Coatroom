@@ -1549,7 +1549,8 @@ void drawShortcutsHelpModal(StudioUiState& state, const StudioCallbacks& callbac
         state.requestOpenUpdatesModal = false;
     }
     if (ImGui::BeginPopupModal("Coatroom Updates##Modal", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextUnformatted("Coatroom v1.2.0 - Automotive Livery Studio");
+        ImGui::TextUnformatted("Coatroom v1.3.0 - Automotive Livery Studio");
+        ImGui::TextColored(StudioColors::ToVec4(StudioColors::TextSecondary), "Installed version: v1.3.0");
         if (state.otaUpdateAvailable) {
             std::string availMsg = state.otaLatestVersion.empty()
                                    ? "New update available!"
@@ -1728,7 +1729,7 @@ void drawTopWorkspaceBar(StudioUiState& state, UvViewportState& uvState,
         if (menuBtn("File", "##MenuFile")) {
             if (ImGui::MenuItem("New Project (4K)", "Ctrl+N"))            { if (callbacks.onNewProject) callbacks.onNewProject(); }
             if (ImGui::MenuItem("Open Project (.cr)...", "Ctrl+L"))       { if (callbacks.onLoadProject) callbacks.onLoadProject(); }
-            if (ImGui::MenuItem("Open Car (.obj)...", "Ctrl+O"))          { if (callbacks.onOpenObj) callbacks.onOpenObj(); }
+            if (ImGui::MenuItem("Open 3D Car (.obj / .fbx)...", "Ctrl+O")) { if (callbacks.onOpenObj) callbacks.onOpenObj(); }
             if (ImGui::MenuItem("Porsche 992 Template", "F5"))            { if (callbacks.onQuickLoadPorsche) callbacks.onQuickLoadPorsche(); }
             ImGui::Separator();
             if (ImGui::MenuItem("Open Livery Texture...", "Ctrl+Shift+O")){ if (callbacks.onOpenLiveryPng) callbacks.onOpenLiveryPng(); }
@@ -1970,8 +1971,10 @@ void drawTopWorkspaceBar(StudioUiState& state, UvViewportState& uvState,
         }
         ImGui::SameLine();
 
+        static bool s_openAboutModal = false;
         if (menuBtn("Help", "##MenuHelp")) {
             if (ImGui::MenuItem("Keyboard Shortcuts...")) state.showShortcutsModal = true;
+            if (ImGui::MenuItem("About Coatroom...")) s_openAboutModal = true;
             ImGui::Separator();
             const char* updLbl = state.otaUpdateAvailable ? "Check for Updates...      " : "Check for Updates...";
             bool chkUpd = ImGui::MenuItem(updLbl);
@@ -1993,6 +1996,20 @@ void drawTopWorkspaceBar(StudioUiState& state, UvViewportState& uvState,
                 state.requestOpenTermsModal = true;
                 if (callbacks.onOpenTerms) callbacks.onOpenTerms();
             }
+            ImGui::EndPopup();
+        }
+        if (s_openAboutModal) {
+            ImGui::OpenPopup("About Coatroom##Modal");
+            s_openAboutModal = false;
+        }
+        if (ImGui::BeginPopupModal("About Coatroom##Modal", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextUnformatted("Coatroom v1.3.0 - Automotive Livery & Photo Studio");
+            ImGui::Separator();
+            ImGui::TextWrapped("Native 3D/2D automotive livery studio supporting .obj and Binary/ASCII .fbx meshes, 4K mipmapped anisotropic decal/type rendering, Cubic Bezier Pen paths, and .cr projects.");
+            ImGui::Spacing();
+            ImGui::TextColored(StudioColors::ToVec4(StudioColors::TextSecondary), "Installed version: v1.3.0");
+            ImGui::Spacing();
+            if (ImGui::Button("Close", ImVec2(90.0f, 0))) ImGui::CloseCurrentPopup();
             ImGui::EndPopup();
         }
         ImGui::PopStyleColor(3);
@@ -3696,10 +3713,10 @@ void drawHomeScreen(StudioUiState& state, CanvasEngine& canvas, const StudioCall
 
             struct PresetSpec { const char* title; const char* spec; int id; };
             static constexpr PresetSpec kPresets[4] = {
-                {"Open Project (.cr)", "Resume saved work",   0},
-                {"Open Car (.obj)",    "Load any 3D mesh",    1},
-                {"Open Livery (.png)", "Load livery texture", 2},
-                {"New 4K Blank",       "4096 x 4096 px",      3},
+                {"Open Project (.cr)",      "Resume saved work",        0},
+                {"Open Car (.obj / .fbx)",  "Load .obj or .fbx 3D mesh",1},
+                {"Open Livery (.png)",      "Load existing texture",    2},
+                {"New 4K Blank",            "4096 x 4096 px",           3},
             };
 
             float tileW = std::min(170.0f, (colW - 40.0f) / 4.0f);
@@ -3776,7 +3793,7 @@ void drawHomeScreen(StudioUiState& state, CanvasEngine& canvas, const StudioCall
                 ImGui::TextColored(StudioColors::ToVec4(StudioColors::TextPrimary), "Template Quick Start");
                 ImGui::SetCursorPosX(colLeft);
                 ImGui::TextColored(StudioColors::ToVec4(StudioColors::TextSecondary),
-                                   "Select any template above to initialize a 4K/2K UV artboard and 3D showroom.\n"
+                                   "Select any option above to load an .obj / .fbx 3D car mesh, open a .cr project, or initialize a 4K UV artboard.\n"
                                    "All exported PNG textures and native .cr projects are saved cleanly with AO panel shading.");
             } else {
                 ImGui::TextColored(StudioColors::ToVec4(StudioColors::TextPrimary), "Recent");
@@ -3847,7 +3864,7 @@ void drawHomeScreen(StudioUiState& state, CanvasEngine& canvas, const StudioCall
                         rdl->AddRectFilled(eMin, eMax, IM_COL32(0x2A, 0x2A, 0x2A, 255), 6.0f);
                         rdl->AddRect(eMin, eMax, cardBorder, 6.0f, 1.0f);
                         const char* emptyMsg = state.recentProjects.empty()
-                                               ? "No recent projects yet. Open a .cr or .obj file or pick a template above."
+                                               ? "No recent projects yet. Open a .cr, .obj, or .fbx file or pick an option above."
                                                : "No recent projects match your filter.";
                         float ew = ImGui::CalcTextSize(emptyMsg).x;
                         rdl->AddText(ImVec2(eMin.x + std::max(12.0f, (colW - ew) * 0.5f), eMin.y + 34.0f),
@@ -3898,10 +3915,14 @@ void drawHomeScreen(StudioUiState& state, CanvasEngine& canvas, const StudioCall
                                 rdl->AddCircle(ImVec2(tc.x + 18.0f, tc.y + 9.0f), 5.0f, wf, 14, 1.25f);
                             }
                             if (!e.kind.empty()) {
-                                ImVec2 bMin(thMax.x - 32.0f, thMin.y + 4.0f);
+                                ImU32 kindCol = equalsCaseInsensitive(e.kind, ".fbx") ? IM_COL32(0x2F, 0xE6, 0xCE, 255) :
+                                                equalsCaseInsensitive(e.kind, ".obj") ? StudioColors::AmberAccent :
+                                                                                        StudioColors::StudioBlue;
+                                float kw = std::max(28.0f, ImGui::CalcTextSize(e.kind.c_str()).x + 10.0f);
+                                ImVec2 bMin(thMax.x - kw - 4.0f, thMin.y + 4.0f);
                                 ImVec2 bMax(thMax.x - 4.0f, thMin.y + 20.0f);
                                 rdl->AddRectFilled(bMin, bMax, IM_COL32(0x22, 0x24, 0x29, 235), 3.0f);
-                                rdl->AddText(ImVec2(bMin.x + 5.0f, bMin.y + 1.0f), StudioColors::StudioBlue, e.kind.c_str());
+                                rdl->AddText(ImVec2(bMin.x + 5.0f, bMin.y + 1.0f), kindCol, e.kind.c_str());
                             }
 
                             rdl->PushClipRect(ImVec2(cMin.x + 8.0f, cMin.y + 111.0f), ImVec2(cMax.x - 8.0f, cMax.y - 4.0f), true);
@@ -3927,7 +3948,10 @@ void drawHomeScreen(StudioUiState& state, CanvasEngine& canvas, const StudioCall
                             ImGui::PopID();
                             rdl->AddRectFilled(rMin, rMax, hov ? IM_COL32(0x36, 0x36, 0x36, 255) : cardBg, 4.0f);
                             rdl->AddLine(ImVec2(rMin.x, rMax.y), rMax, StudioColors::Border, 1.0f);
-                            rdl->AddText(ImVec2(rMin.x + 10.0f, rMin.y + 7.0f), StudioColors::StudioBlue,
+                            ImU32 rowKindCol = equalsCaseInsensitive(e.kind, ".fbx") ? IM_COL32(0x2F, 0xE6, 0xCE, 255) :
+                                               equalsCaseInsensitive(e.kind, ".obj") ? StudioColors::AmberAccent :
+                                                                                       StudioColors::StudioBlue;
+                            rdl->AddText(ImVec2(rMin.x + 10.0f, rMin.y + 7.0f), rowKindCol,
                                          e.kind.empty() ? ".cr" : e.kind.c_str());
                             rdl->AddText(ImVec2(rMin.x + 54.0f, rMin.y + 7.0f), StudioColors::TextPrimary, e.name.c_str());
                             const char* detailStr = e.detail.empty() ? e.path.c_str() : e.detail.c_str();

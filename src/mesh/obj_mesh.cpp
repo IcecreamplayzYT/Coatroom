@@ -1,4 +1,5 @@
 #include "mesh/obj_mesh.hpp"
+#include "mesh/fbx_loader.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -382,6 +383,12 @@ std::string resolveAoFromMtlOrCompanion(const std::filesystem::path& objPath,
 } // namespace
 
 bool ObjMesh::loadFromFile(const std::string& path, bool normalizeScale) {
+    std::string fileExt = utf8Path(path).extension().string();
+    for (char& c : fileExt) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (fileExt == ".fbx") {
+        return loadFbxIntoObjMesh(path, *this, normalizeScale);
+    }
+
     std::ifstream ifs(path, std::ios::binary);
     if (!ifs.is_open()) return false;
 

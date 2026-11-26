@@ -28,7 +28,7 @@ namespace fs = std::filesystem;
 namespace {
 
 constexpr wchar_t kAppName[] = L"Coatroom";
-constexpr wchar_t kAppVersion[] = L"1.2.0";
+constexpr wchar_t kAppVersion[] = L"1.3.0";
 constexpr wchar_t kPublisher[] = L"Coatroom Studio";
 constexpr wchar_t kWndClass[] = L"CoatroomSetupWizardClass";
 
@@ -304,6 +304,51 @@ bool copyLooseFile(const fs::path& src, const fs::path& dst, uint64_t& totalByte
     return true;
 }
 
+bool hasEmbeddedResource(int resId) {
+    return FindResourceW(nullptr, MAKEINTRESOURCEW(resId), RT_RCDATA) != nullptr;
+}
+
+bool extractEmbeddedResourceToFile(int resId, const fs::path& dst, uint64_t& totalBytes, std::wstring& errOut) {
+    HRSRC hRes = FindResourceW(nullptr, MAKEINTRESOURCEW(resId), RT_RCDATA);
+    if (!hRes) return false;
+    HGLOBAL hData = LoadResource(nullptr, hRes);
+    if (!hData) {
+        errOut = L"LoadResource failed for embedded resource " + std::to_wstring(resId);
+        return false;
+    }
+    DWORD size = SizeofResource(nullptr, hRes);
+    const void* ptr = LockResource(hData);
+    if (!ptr || size == 0) {
+        errOut = L"LockResource failed for embedded resource " + std::to_wstring(resId);
+        return false;
+    }
+
+    std::error_code ec;
+    if (dst.has_parent_path()) {
+        fs::create_directories(dst.parent_path(), ec);
+    }
+    if (!waitForUnlockedTarget(dst, 5000)) {
+        errOut = L"Target file is locked by a running Coatroom process: " + dst.wstring();
+        return false;
+    }
+
+    HANDLE hOut = CreateFileW(dst.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hOut == INVALID_HANDLE_VALUE) {
+        errOut = L"Failed to write " + dst.filename().wstring() + L" (error " + std::to_wstring(GetLastError()) + L")";
+        return false;
+    }
+
+    DWORD written = 0;
+    BOOL ok = WriteFile(hOut, ptr, size, &written, nullptr);
+    CloseHandle(hOut);
+    if (!ok || written != size) {
+        errOut = L"Incomplete write for " + dst.filename().wstring();
+        return false;
+    }
+    totalBytes += size;
+    return true;
+}
+
 bool copyDirectoryRecursive(const fs::path& srcDir, const fs::path& dstDir, uint64_t& totalBytes, std::wstring& errOut) {
     std::error_code ec;
     if (!fs::exists(srcDir, ec) || !fs::is_directory(srcDir, ec)) return true;
@@ -404,43 +449,63 @@ bool performInstall(
         return false;
     }
 
-    onStep(15, L"Copying Coatroom application files...");
+    onStep(15, L"Installing Coatroom application files...");
     uint64_t totalBytes = 0;
 
-    // Locate Coatroom.exe & CoatroomUninstall.exe from staging or sibling dir
-    fs::path coatroomExeSrc = stageDir / L"Coatroom.exe";
-    if (!fs::exists(coatroomExeSrc, ec) && !opts.testMode) {
-        errOut = L"Coatroom.exe not found next to installer or in dist/staging folder.";
-        return false;
-    }
-    if (!copyLooseFile(coatroomExeSrc, targetDir / L"Coatroom.exe", totalBytes, errOut)) return false;
-
-    onStep(35, L"Copying updater, uninstaller, and icon assets...");
-    fs::path updaterSrc = stageDir / L"CoatroomUpdater.exe";
-    if (!fs::exists(updaterSrc, ec)) updaterSrc = exeDir / L"CoatroomUpdater.exe";
-    if (!copyLooseFile(updaterSrc, targetDir / L"CoatroomUpdater.exe", totalBytes, errOut)) return false;
-
-    fs::path uninstSrc = stageDir / L"CoatroomUninstall.exe";
-    if (!fs::exists(uninstSrc, ec)) uninstSrc = exeDir / L"CoatroomUninstall.exe";
-    if (!copyLooseFile(uninstSrc, targetDir / L"CoatroomUninstall.exe", totalBytes, errOut)) return false;
-
-    fs::path icoSrc = stageDir / L"coatroom.ico";
-    if (!fs::exists(icoSrc, ec)) icoSrc = exeDir / L"coatroom.ico";
-    if (!fs::exists(icoSrc, ec)) icoSrc = stageDir / L"resources" / L"coatroom.ico";
-    if (!fs::exists(icoSrc, ec)) icoSrc = exeDir.parent_path() / L"resources" / L"coatroom.ico";
-    if (!copyLooseFile(icoSrc, targetDir / L"coatroom.ico", totalBytes, errOut)) return false;
-
-    // Install LICENSE_AND_TOU.txt (fallback to embedded text if missing in staging)
-    fs::path touSrc = stageDir / L"LICENSE_AND_TOU.txt";
-    if (!fs::exists(touSrc, ec)) touSrc = exeDir / L"LICENSE_AND_TOU.txt";
-    if (!fs::exists(touSrc, ec)) touSrc = exeDir.parent_path() / L"LICENSE_AND_TOU.txt";
-    if (fs::exists(touSrc, ec)) {
-        if (!copyLooseFile(touSrc, targetDir / L"LICENSE_AND_TOU.txt", totalBytes, errOut)) return false;
+    // Install Coatroom.exe (prefer embedded RT_RCDATA 102, else sibling staging)
+    if (hasEmbeddedResource(102)) {
+        if (!extractEmbeddedResourceToFile(102, targetDir / L"Coatroom.exe", totalBytes, errOut)) return false;
     } else {
-        std::ofstream ofs(targetDir / L"LICENSE_AND_TOU.txt", std::ios::binary);
-        if (ofs) {
-            ofs << kFallbackTermsUtf8;
-            totalBytes += std::strlen(kFallbackTermsUtf8);
+        fs::path coatroomExeSrc = stageDir / L"Coatroom.exe";
+        if (!fs::exists(coatroomExeSrc, ec) && !opts.testMode) {
+            errOut = L"Coatroom.exe not found next to installer or in dist/staging folder.";
+            return false;
+        }
+        if (!copyLooseFile(coatroomExeSrc, targetDir / L"Coatroom.exe", totalBytes, errOut)) return false;
+    }
+
+    onStep(35, L"Installing updater, uninstaller, and icon assets...");
+    if (hasEmbeddedResource(104)) {
+        if (!extractEmbeddedResourceToFile(104, targetDir / L"CoatroomUpdater.exe", totalBytes, errOut)) return false;
+    } else {
+        fs::path updaterSrc = stageDir / L"CoatroomUpdater.exe";
+        if (!fs::exists(updaterSrc, ec)) updaterSrc = exeDir / L"CoatroomUpdater.exe";
+        if (!copyLooseFile(updaterSrc, targetDir / L"CoatroomUpdater.exe", totalBytes, errOut)) return false;
+    }
+
+    if (hasEmbeddedResource(103)) {
+        if (!extractEmbeddedResourceToFile(103, targetDir / L"CoatroomUninstall.exe", totalBytes, errOut)) return false;
+    } else {
+        fs::path uninstSrc = stageDir / L"CoatroomUninstall.exe";
+        if (!fs::exists(uninstSrc, ec)) uninstSrc = exeDir / L"CoatroomUninstall.exe";
+        if (!copyLooseFile(uninstSrc, targetDir / L"CoatroomUninstall.exe", totalBytes, errOut)) return false;
+    }
+
+    if (hasEmbeddedResource(105)) {
+        if (!extractEmbeddedResourceToFile(105, targetDir / L"coatroom.ico", totalBytes, errOut)) return false;
+    } else {
+        fs::path icoSrc = stageDir / L"coatroom.ico";
+        if (!fs::exists(icoSrc, ec)) icoSrc = exeDir / L"coatroom.ico";
+        if (!fs::exists(icoSrc, ec)) icoSrc = stageDir / L"resources" / L"coatroom.ico";
+        if (!fs::exists(icoSrc, ec)) icoSrc = exeDir.parent_path() / L"resources" / L"coatroom.ico";
+        if (!copyLooseFile(icoSrc, targetDir / L"coatroom.ico", totalBytes, errOut)) return false;
+    }
+
+    // Install LICENSE_AND_TOU.txt (embedded 106 -> sibling -> fallback text)
+    if (hasEmbeddedResource(106)) {
+        if (!extractEmbeddedResourceToFile(106, targetDir / L"LICENSE_AND_TOU.txt", totalBytes, errOut)) return false;
+    } else {
+        fs::path touSrc = stageDir / L"LICENSE_AND_TOU.txt";
+        if (!fs::exists(touSrc, ec)) touSrc = exeDir / L"LICENSE_AND_TOU.txt";
+        if (!fs::exists(touSrc, ec)) touSrc = exeDir.parent_path() / L"LICENSE_AND_TOU.txt";
+        if (fs::exists(touSrc, ec)) {
+            if (!copyLooseFile(touSrc, targetDir / L"LICENSE_AND_TOU.txt", totalBytes, errOut)) return false;
+        } else {
+            std::ofstream ofs(targetDir / L"LICENSE_AND_TOU.txt", std::ios::binary);
+            if (ofs) {
+                ofs << kFallbackTermsUtf8;
+                totalBytes += std::strlen(kFallbackTermsUtf8);
+            }
         }
     }
 
@@ -646,8 +711,8 @@ LRESULT CALLBACK SetupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         };
 
         const wchar_t* titleText = ui->opts.existingInstallDetected
-            ? L"Coatroom 1.2.0 — Update Existing Installation"
-            : L"Coatroom 1.2.0 Setup";
+            ? L"Coatroom 1.3.0 — Update Existing Installation"
+            : L"Coatroom 1.3.0 Setup";
         std::wstring subText = ui->opts.existingInstallDetected
             ? (L"Existing Coatroom v" + ui->opts.existingVersion + L" detected. Your .cr projects and settings will be preserved.")
             : L"3D Automotive Livery & Beauty Render Studio  (Per-User Install, No Admin Required)";

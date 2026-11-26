@@ -16,6 +16,7 @@
 
 #include "math/geom.hpp"
 #include "mesh/obj_mesh.hpp"
+#include "mesh/fbx_loader.hpp"
 #include "paint/canvas_engine.hpp"
 #include "render/d3d11_renderer.hpp"
 #include "ui/ui_types.hpp"
@@ -56,7 +57,9 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg
 
 namespace {
 
-constexpr const char* kCoatroomVersion = "1.2.0";
+constexpr const char* kCoatroomVersion = "1.3.0";
+constexpr const char* kDefaultOtaManifestUrl =
+    "https://github.com/IcecreamplayzYT/Coatroom/releases/latest/download/release-manifest.json";
 constexpr int kIdIconCoatroom = 101;
 constexpr const char* kPorscheObjPath = "C:\\Users\\MyHP _)\\Downloads\\Porsche 992 GT3 R - 2023.obj";
 constexpr const char* kPorscheLiveryPath =
@@ -990,7 +993,10 @@ bool loadMeshFile(AppState& app, const std::string& path, bool preserveCanvas = 
     app.uiState.showHomeScreen = false;
     if (!preserveCanvas) {
         app.documentDirty = false;
-        pushRecentProject(app, path, ".obj", std::to_string(app.canvas.width) + "px | " + std::to_string(app.mesh.tris.size()) + " tris");
+        std::string mExt = std::filesystem::path(path).extension().string();
+        for (char& ch : mExt) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        if (mExt.empty()) mExt = ".obj";
+        pushRecentProject(app, path, mExt, std::to_string(app.canvas.width) + "px | " + std::to_string(app.mesh.tris.size()) + " tris");
     }
     return true;
 }
@@ -3031,7 +3037,7 @@ lps::StudioCallbacks makeCallbacks(AppState& app) {
         for (char& ch : ext) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
         if (ext == ".cr" || ext == ".lps") {
             openProjectFilePath(app, path, false);
-        } else if (ext == ".obj") {
+        } else if (ext == ".obj" || ext == ".fbx") {
             loadMeshFile(app, path, false);
         } else {
             if (app.canvas.loadBaseTexture(path)) {
@@ -3156,7 +3162,8 @@ lps::StudioCallbacks makeCallbacks(AppState& app) {
     };
     cb.onCheckUpdates = [&app]() {
         app.uiState.statusText = "Checking for Coatroom updates...";
-        lps::OtaCheckResult res = lps::checkForOtaUpdates(kCoatroomVersion, app.otaManifestUrl);
+        std::string manUrl = app.otaManifestUrl.empty() ? kDefaultOtaManifestUrl : app.otaManifestUrl;
+        lps::OtaCheckResult res = lps::checkForOtaUpdates(kCoatroomVersion, manUrl);
         if (!res.ok) {
             app.uiState.otaUpdateAvailable = false;
             app.uiState.statusText = "Update check: " + res.error;
@@ -3186,7 +3193,7 @@ lps::StudioCallbacks makeCallbacks(AppState& app) {
                 if (!updaterPath.empty()) {
                     std::wstring args = L"--pid " + std::to_wstring(GetCurrentProcessId()) +
                                         L" --dir \"" + installDir + L"\" --current-version " +
-                                        L"1.2.0 --relaunch";
+                                        L"1.3.0 --relaunch";
                     if (!app.otaManifestUrl.empty()) {
                         int mwlen = MultiByteToWideChar(CP_UTF8, 0, app.otaManifestUrl.c_str(), -1, nullptr, 0);
                         std::wstring wMan(mwlen > 0 ? mwlen - 1 : 0, L'\0');
@@ -4275,6 +4282,111 @@ int runSmokeTest(AppState& app, const lps::StudioCallbacks& callbacks, const std
                     msSince(), app.canvas.fontFamilies.size(), redDiff, blueDiff);
     }
 
+    // 14. Crisp Premultiplied Mipmapped Anisotropic 8x Image Downscaling (zero dark fringe)
+    {
+        const int cw = 512, ch = 512;
+        std::vector<uint8_t> chk(static_cast<size_t>(cw) * ch * 4u, 0);
+        for (int y = 0; y < ch; ++y) {
+            for (int x = 0; x < cw; ++x) {
+                size_t o = (static_cast<size_t>(y) * cw + x) * 4u;
+                if (x < 64 || x >= cw - 64 || y < 64 || y >= ch - 64) {
+                    // Transparent black border: must NOT bleed dark halo onto bright background
+                    chk[o + 0] = 0; chk[o + 1] = 0; chk[o + 2] = 0; chk[o + 3] = 0;
+                } else {
+                    bool whiteCell = (((x / 32) + (y / 32)) % 2) == 0;
+                    uint8_t v = whiteCell ? 255 : 20;
+                    chk[o + 0] = v; chk[o + 1] = v; chk[o + 2] = v; chk[o + 3] = 255;
+                }
+            }
+        }
+        lps::CanvasEngine mipEng;
+        mipEng.init(1024, lps::Color4u8{240, 240, 240, 255});
+        mipEng.ensureEditableLayer();
+        lps::DecalLayerProps dp{};
+        dp.anchoredIn3D = false;
+        dp.uvPos = {0.5f, 0.5f};
+        dp.uvScale = {0.0625f, 0.0625f}; // 512px -> 64px (8x downscale)
+        int di = mipEng.addImageItemFromRgba("Mip Checkerboard", std::move(chk), cw, ch, dp, nullptr);
+        if (di < 0) {
+            std::fprintf(stderr, "[SMOKE FAIL] Check 14 addImageItemFromRgba failed\n");
+            return 55;
+        }
+        int minIn = 255, maxIn = 0, edgeMin = 255;
+        for (int y = 480; y < 544; ++y) {
+            for (int x = 480; x < 544; ++x) {
+                size_t o = (static_cast<size_t>(y) * 1024u + x) * 4u;
+                int lum = (mipEng.compositeRgba[o + 0] + mipEng.compositeRgba[o + 1] + mipEng.compositeRgba[o + 2]) / 3;
+                if (x >= 492 && x < 532 && y >= 492 && y < 532) {
+                    minIn = std::min(minIn, lum);
+                    maxIn = std::max(maxIn, lum);
+                } else if (x <= 486 || x >= 538) {
+                    edgeMin = std::min(edgeMin, lum);
+                }
+            }
+        }
+        if ((maxIn - minIn) < 140 || edgeMin < 230) {
+            std::fprintf(stderr, "[SMOKE FAIL] Check 14 8x mip contrast/fringe failed (in=%d..%d, edgeMin=%d)\n",
+                         minIn, maxIn, edgeMin);
+            return 56;
+        }
+        std::printf("[SMOKE %lld ms] Premultiplied 8x mipmapped downscale verified (contrast=%d..%d, edgeMinLum=%d)\n",
+                    msSince(), minIn, maxIn, edgeMin);
+    }
+
+    // 15. Native Binary zlib & ASCII .fbx Car Load + Raycast + 3D Decal + 320x180 Front 3/4th Thumbnail
+    {
+        std::string binFbx = (std::filesystem::path(outDir) / "smoke_car_bin.fbx").string();
+        std::string ascFbx = (std::filesystem::path(outDir) / "smoke_car_asc.fbx").string();
+        if (!lps::writeTestBinaryFbxCar(binFbx) || !lps::writeTestAsciiFbxCar(ascFbx)) {
+            std::fprintf(stderr, "[SMOKE FAIL] Failed writing test .fbx cars\n");
+            return 57;
+        }
+        auto savedThumbsDir = app.thumbsDir;
+        app.thumbsDir = std::filesystem::path(outDir) / "fbx_thumbs";
+        app.suppressRecentTracking = true;
+
+        for (int pass = 0; pass < 2; ++pass) {
+            const std::string& fbxPath = (pass == 0) ? binFbx : ascFbx;
+            if (!loadMeshFile(app, fbxPath, false) || app.mesh.tris.empty()) {
+                std::fprintf(stderr, "[SMOKE FAIL] Failed loading .fbx car: %s\n", fbxPath.c_str());
+                return 58;
+            }
+            lps::RayHit hit = app.mesh.raycast({lps::Vec3{0.0f, 3.0f, 0.0f}, lps::Vec3{0.0f, -1.0f, 0.0f}}, true);
+            if (!hit.hit) hit = app.mesh.raycast({lps::Vec3{3.5f, 0.45f, 0.0f}, lps::Vec3{-1.0f, 0.0f, 0.0f}}, true);
+            if (!hit.hit) {
+                std::fprintf(stderr, "[SMOKE FAIL] Raycast missed .fbx car: %s\n", fbxPath.c_str());
+                return 59;
+            }
+            std::vector<uint8_t> badgeRgba(64u * 64u * 4u, 255);
+            for (size_t i = 0; i < 64u * 64u; ++i) {
+                badgeRgba[i * 4 + 0] = 47;
+                badgeRgba[i * 4 + 1] = 230;
+                badgeRgba[i * 4 + 2] = 206;
+                badgeRgba[i * 4 + 3] = 255;
+            }
+            lps::DecalLayerProps dp{};
+            dp.anchoredIn3D = true;
+            dp.pos3D = hit.pos;
+            dp.nrm3D = hit.normal;
+            dp.right3D = computeSurfaceRight3D(app, hit.normal);
+            dp.uvPos = hit.uv;
+            dp.worldWidth = 0.45f;
+            app.canvas.ensureEditableLayer();
+            if (app.canvas.addImageItemFromRgba("FBX 3D Decal", std::move(badgeRgba), 64, 64, dp, &app.mesh) < 0) {
+                std::fprintf(stderr, "[SMOKE FAIL] 3D decal projection on .fbx failed\n");
+                return 60;
+            }
+            std::string fbxThumb = captureFront34Thumbnail(app, fbxPath);
+            if (fbxThumb.empty() || !std::filesystem::exists(fbxThumb) ||
+                std::filesystem::file_size(fbxThumb) < 1024) {
+                std::fprintf(stderr, "[SMOKE FAIL] .fbx 320x180 Front 3/4th thumbnail failed: %s\n", fbxPath.c_str());
+                return 61;
+            }
+        }
+        app.thumbsDir = savedThumbsDir;
+        std::printf("[SMOKE %lld ms] Binary zlib + ASCII .fbx car load, raycast, 3D decal, & 320x180 thumbnails verified!\n", msSince());
+    }
+
     std::printf("[SMOKE PASS] All automated checks passed!\n");
     std::fflush(stdout);
     return 0;
@@ -4548,7 +4660,7 @@ int main(int argc, char** argv) {
             smokeTest = true;
         } else if (std::strcmp(argv[i], "--smoke-out") == 0 && i + 1 < argc) {
             smokeOutDir = argv[++i];
-        } else if (std::strcmp(argv[i], "--obj") == 0 && i + 1 < argc) {
+        } else if ((std::strcmp(argv[i], "--obj") == 0 || std::strcmp(argv[i], "--mesh") == 0) && i + 1 < argc) {
             cliObjPath = argv[++i];
         } else if (std::strcmp(argv[i], "--texture") == 0 && i + 1 < argc) {
             cliTexturePath = argv[++i];
@@ -4566,6 +4678,12 @@ int main(int argc, char** argv) {
             cliScriptPath = argv[++i];
         } else if (std::strcmp(argv[i], "--mcp-stdio") == 0) {
             mcpStdio = true;
+        } else if (argv[i][0] != '-') {
+            std::string pExt = std::filesystem::path(argv[i]).extension().string();
+            for (char& ch : pExt) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            if ((pExt == ".obj" || pExt == ".fbx") && cliObjPath.empty()) {
+                cliObjPath = argv[i];
+            }
         }
     }
 
